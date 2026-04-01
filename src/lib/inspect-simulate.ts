@@ -282,6 +282,7 @@ const ROUND = (n: number) => Math.round(n * 100) / 100;
 /**
  * Two-phase search: coarse 0.05 buy grid + data-rounded prices, then ±0.06 refinement at 0.01
  * around top coarse hits. Evaluates only (buy,sell) with sell - buy <= maxSpread and sell > buy.
+ * @param minBuyPrice — only pairs with buy threshold >= this (default 0).
  */
 export function findBestPricePairs(
   byCoin: Record<InspectCoinKey, PriceHistory>,
@@ -290,9 +291,14 @@ export function findBestPricePairs(
   maxSpread: number,
   oncePerRound: boolean,
   topN: number,
+  minBuyPrice = 0,
 ): BestCaseRow[] {
   const MIN_GAP = 0.02;
   if (maxSpread < MIN_GAP) return [];
+
+  const minB = ROUND(
+    Math.max(0, Math.min(0.98, Number.isFinite(minBuyPrice) ? minBuyPrice : 0)),
+  );
 
   let lo = Infinity;
   let hi = -Infinity;
@@ -314,12 +320,14 @@ export function findBestPricePairs(
   lo = Math.max(0.01, ROUND(Math.floor(lo * 100) / 100));
   hi = Math.min(0.99, ROUND(Math.ceil(hi * 100) / 100));
 
-  for (let x = lo; x <= hi + 1e-9; x += 0.05) {
+  const searchLo = Math.max(lo, minB);
+
+  for (let x = searchLo; x <= hi + 1e-9; x += 0.05) {
     priceTicks.add(ROUND(x));
   }
 
   let buyCandidates = [...priceTicks]
-    .filter((b) => b >= lo && b <= hi - MIN_GAP)
+    .filter((b) => b >= searchLo - 1e-9 && b <= hi - MIN_GAP)
     .sort((a, b) => a - b);
 
   const MAX_BUY_CANDIDATES = 160;
@@ -340,6 +348,7 @@ export function findBestPricePairs(
     const b = ROUND(buy);
     const s = ROUND(sell);
     if (!(s > b)) return null;
+    if (b + 1e-9 < minB) return null;
     const key = `${b}\0${s}`;
     if (seen.has(key)) return null;
     seen.add(key);
@@ -386,7 +395,14 @@ export function findBestPricePairs(
       for (let ds = -REFINE_DELTA; ds <= REFINE_DELTA + 1e-9; ds += FINE) {
         const buy = row.buy + db;
         const sell = row.sell + ds;
-        if (buy < lo - 1e-9 || sell > hi + 1e-9 || buy < 0.01 || sell > 0.99) continue;
+        if (
+          buy < lo - 1e-9 ||
+          buy < minB - 1e-9 ||
+          sell > hi + 1e-9 ||
+          buy < 0.01 ||
+          sell > 0.99
+        )
+          continue;
         const r = score(buy, sell);
         if (r) refined.push(r);
       }

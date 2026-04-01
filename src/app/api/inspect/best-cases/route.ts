@@ -14,6 +14,12 @@ export async function POST(request: NextRequest) {
     const coins = body.coins as InspectCoinKey[] | undefined;
     const maxSpread = Number(body.maxSpread ?? 0.4);
     const topN = Math.min(50, Math.max(1, Math.floor(Number(body.topN ?? 10))));
+    const minBuyRaw = body.minBuyPrice;
+    const minBuyPrice =
+      minBuyRaw === '' || minBuyRaw === undefined || minBuyRaw === null
+        ? 0
+        : Number(minBuyRaw);
+    const minBuy = Number.isFinite(minBuyPrice) && minBuyPrice >= 0 ? minBuyPrice : 0;
 
     if (!Number.isFinite(usdPerBuy) || usdPerBuy <= 0) {
       return NextResponse.json({ error: 'usdPerBuy must be a positive number' }, { status: 400 });
@@ -48,12 +54,29 @@ export async function POST(request: NextRequest) {
       ReturnType<typeof parseInspectHistory>
     >;
 
-    const oncePerRound = findBestPricePairs(byCoin, selected, usdPerBuy, maxSpread, true, topN);
-    const multiWithinRound = findBestPricePairs(byCoin, selected, usdPerBuy, maxSpread, false, topN);
+    const oncePerRound = findBestPricePairs(
+      byCoin,
+      selected,
+      usdPerBuy,
+      maxSpread,
+      true,
+      topN,
+      minBuy,
+    );
+    const multiWithinRound = findBestPricePairs(
+      byCoin,
+      selected,
+      usdPerBuy,
+      maxSpread,
+      false,
+      topN,
+      minBuy,
+    );
 
     return NextResponse.json({
       maxSpread,
       topN,
+      minBuyPrice: minBuy,
       oncePerRound,
       multiWithinRound,
     });
@@ -69,7 +92,10 @@ export async function POST(request: NextRequest) {
 
 export async function GET() {
   return NextResponse.json(
-    { error: 'Use POST with usdPerBuy, coins[], optional maxSpread (default 0.4), topN (default 10)' },
+    {
+      error:
+        'Use POST with usdPerBuy, coins[], optional maxSpread (default 0.4), topN (default 10), minBuyPrice (default 0)',
+    },
     { status: 405 },
   );
 }

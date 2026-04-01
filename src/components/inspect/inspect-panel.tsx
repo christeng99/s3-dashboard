@@ -78,6 +78,7 @@ type BestCaseRow = {
 type BestCasesResult = {
   maxSpread: number;
   topN: number;
+  minBuyPrice?: number;
   oncePerRound: BestCaseRow[];
   multiWithinRound: BestCaseRow[];
 };
@@ -278,8 +279,12 @@ function BestCasesSection({
         <h3 className="font-semibold">Best price pairs</h3>
         <p className="text-muted-foreground text-xs mt-1">
           Top {data.topN} by profit per mode, with sell − buy ≤ {data.maxSpread.toFixed(2)} and sell &gt;
-          buy only. Same simulator rules (multi: max 5 buys / 5 sells per slug per market). Min bal is
-          the sum of per-market minimum balances for that pair.
+          buy only. Buy threshold floored at{' '}
+          <span className="text-foreground font-medium tabular-nums">
+            {(data.minBuyPrice ?? 0).toFixed(2)}
+          </span>
+          . Same simulator rules (multi: max 5 buys / 5 sells per slug per market). Min bal is the sum of
+          per-market minimum balances for that pair.
         </p>
       </div>
       {table('Multi within each round', data.multiWithinRound)}
@@ -377,6 +382,12 @@ export function InspectPanel() {
           maxSpread: 0.4,
           topN: 10,
           coins: Array.from(selected),
+          minBuyPrice:
+            buyPrice.trim() === ''
+              ? 0
+              : Number.isFinite(Number(buyPrice)) && Number(buyPrice) >= 0
+                ? Number(buyPrice)
+                : 0,
         }),
       });
       const data = await res.json();
@@ -390,7 +401,7 @@ export function InspectPanel() {
     } finally {
       setLoadingBest(false);
     }
-  }, [usdPerBuy, selected]);
+  }, [usdPerBuy, buyPrice, selected]);
 
   const busy = loading || loadingBest;
 
@@ -467,9 +478,11 @@ export function InspectPanel() {
           </div>
         </div>
         <p className="text-[11px] text-muted-foreground mt-1.5 leading-snug">
-          Sell must be <span className="text-foreground font-medium">greater than</span> buy. Buy when
-          market &lt; buy; sell when market &gt; sell. Multi mode: at most 5 buys and 5 sells per slug
-          per market.
+          Sell must be <span className="text-foreground font-medium">greater than</span> buy for
+          Calculate. Buy when market &lt; buy; sell when market &gt; sell. Multi mode: at most 5 buys and
+          5 sells per slug per market. <span className="text-foreground">Find best cases</span> uses{' '}
+          <span className="font-medium">Price to buy</span> as the minimum buy threshold only (leave empty
+          for 0).
         </p>
       </div>
 
