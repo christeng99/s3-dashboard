@@ -1,7 +1,7 @@
 'use client';
 
 import React from 'react';
-import { FileText, Settings } from 'lucide-react';
+import { FileText, Microscope, Settings } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
 
@@ -18,6 +18,11 @@ export function Sidebar({ isOpen, onClose, activeView, onViewChange }: SidebarPr
       id: 'explorer',
       label: 'File Explorer',
       icon: FileText,
+    },
+    {
+      id: 'inspect',
+      label: 'Inspect',
+      icon: Microscope,
     },
     {
       id: 'settings',

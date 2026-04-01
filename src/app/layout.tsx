@@ -14,7 +14,7 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: 'Theye ML Dashboard',
+  title: 'S3 Dashboard',
   description: 'AWS S3 File Explorer and Manager',
 };
 
