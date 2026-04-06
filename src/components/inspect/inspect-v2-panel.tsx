@@ -44,6 +44,7 @@ type InspectV2Response = {
     token: string;
     s3Key: string;
     priceDiff: number;
+    minimumPrice: number;
     multiMode: boolean;
   };
   slugCount: number | null;
@@ -56,6 +57,7 @@ export function InspectV2Panel() {
   const [timeSeconds, setTimeSeconds] = useState('');
   const [amount, setAmount] = useState('');
   const [priceDiff, setPriceDiff] = useState('10');
+  const [minimumPrice, setMinimumPrice] = useState('1');
   const [multiMode, setMultiMode] = useState(false);
   const [token, setToken] = useState<CoinId | ''>('');
   const [loading, setLoading] = useState(false);
@@ -68,6 +70,7 @@ export function InspectV2Panel() {
     const t = Number(timeSeconds);
     const a = Number(amount);
     const pd = Number(priceDiff);
+    const mp = Math.floor(Number(minimumPrice));
     if (!Number.isFinite(t) || t < 0 || t > 300) {
       setError('Time must be a number from 0 to 300 (seconds).');
       return;
@@ -78,6 +81,10 @@ export function InspectV2Panel() {
     }
     if (!Number.isFinite(pd)) {
       setError('Enter a valid price diff.');
+      return;
+    }
+    if (!Number.isFinite(mp) || mp < 1 || mp > 100) {
+      setError('Minimum price must be an integer from 1 to 100.');
       return;
     }
     if (!token) {
@@ -95,6 +102,7 @@ export function InspectV2Panel() {
           amount: a,
           token,
           priceDiff: pd,
+          minimumPrice: mp,
           multiMode,
         }),
       });
@@ -115,7 +123,7 @@ export function InspectV2Panel() {
     } finally {
       setLoading(false);
     }
-  }, [timeSeconds, amount, priceDiff, multiMode, token]);
+  }, [timeSeconds, amount, priceDiff, minimumPrice, multiMode, token]);
 
   return (
     <Card className="max-w-5xl p-5 md:p-6 space-y-4">
@@ -164,6 +172,22 @@ export function InspectV2Panel() {
             placeholder="e.g. 10"
             value={priceDiff}
             onChange={(e) => setPriceDiff(e.target.value)}
+          />
+        </div>
+        <div className="space-y-1.5 min-w-[8rem] flex-1 sm:flex-initial sm:max-w-[10rem]">
+          <label htmlFor="inspect-v2-minprice" className="text-sm font-medium">
+            Min buy X
+          </label>
+          <Input
+            id="inspect-v2-minprice"
+            type="number"
+            inputMode="numeric"
+            min={1}
+            max={100}
+            step={1}
+            placeholder="1–100"
+            value={minimumPrice}
+            onChange={(e) => setMinimumPrice(e.target.value)}
           />
         </div>
         <label className="flex items-center gap-2 text-sm cursor-pointer select-none pb-2 shrink-0">
@@ -218,7 +242,8 @@ export function InspectV2Panel() {
       {result != null ? (
         <div className="rounded-md border border-border overflow-x-auto">
           <p className="text-sm font-medium px-3 pt-3">
-            Top by profit (then lowest min. balance). Buy at X, sell 94% of tokens at X + price diff.
+            Top by profit (then lowest min. balance). Only buy X ≥ min buy X. Sell 94% of tokens at X + price
+            diff.
           </p>
           <table className="w-full text-sm border-collapse min-w-[640px] mt-2 mb-3">
             <thead>
@@ -293,6 +318,12 @@ export function InspectV2Panel() {
                 <tr className="border-b border-border/60">
                   <td className="py-2 px-3 text-muted-foreground">Price diff</td>
                   <td className="py-2 px-3 tabular-nums">{result.meta.priceDiff}</td>
+                </tr>
+                <tr className="border-b border-border/60">
+                  <td className="py-2 px-3 text-muted-foreground">Min buy X (1–100)</td>
+                  <td className="py-2 px-3 tabular-nums">
+                    {result.meta.minimumPrice ?? '—'}
+                  </td>
                 </tr>
                 <tr className="border-b border-border/60">
                   <td className="py-2 px-3 text-muted-foreground">Multi mode</td>

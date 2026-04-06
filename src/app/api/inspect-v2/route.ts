@@ -127,6 +127,7 @@ export async function POST(request: NextRequest) {
     const timeSeconds = Number(body.timeSeconds ?? body.time);
     const amount = Number(body.amount);
     const priceDiff = Number(body.priceDiff);
+    const minimumPrice = Math.floor(Number(body.minimumPrice));
     const multiMode =
       body.multiMode === true ||
       body.multiMode === "true" ||
@@ -148,6 +149,16 @@ export async function POST(request: NextRequest) {
     if (!Number.isFinite(priceDiff)) {
       return NextResponse.json(
         { error: "priceDiff must be a valid number" },
+        { status: 400 },
+      );
+    }
+    if (
+      !Number.isFinite(minimumPrice) ||
+      minimumPrice < 1 ||
+      minimumPrice > 100
+    ) {
+      return NextResponse.json(
+        { error: "minimumPrice must be an integer from 1 to 100" },
         { status: 400 },
       );
     }
@@ -202,7 +213,7 @@ export async function POST(request: NextRequest) {
     const timeLimit = timeSeconds * 100;
 
     const topScores = [...allCandidatePrices]
-      .filter((X) => X > 0)
+      .filter((X) => X > 0 && X >= minimumPrice)
       .map((price) => {
         const { spentRaw, earnedRaw, minBalanceRaw, bought, sold } =
           simulateBuySellAtX(
@@ -237,6 +248,7 @@ export async function POST(request: NextRequest) {
         token,
         s3Key,
         priceDiff,
+        minimumPrice,
         multiMode,
       },
       slugCount,
@@ -257,7 +269,7 @@ export async function GET() {
   return NextResponse.json(
     {
       error:
-        "Use POST with timeSeconds (0–300), amount, token, priceDiff, multiMode",
+        "Use POST with timeSeconds (0–300), amount, token, priceDiff, minimumPrice (1–100), multiMode",
     },
     { status: 405 },
   );
