@@ -1,7 +1,7 @@
 'use client';
 
 import React from 'react';
-import { FileText, Microscope, Settings } from 'lucide-react';
+import { FileText, Layers2, Microscope, Settings } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
 
@@ -23,6 +23,11 @@ export function Sidebar({ isOpen, onClose, activeView, onViewChange }: SidebarPr
       id: 'inspect',
       label: 'Inspect',
       icon: Microscope,
+    },
+    {
+      id: 'inspect-v2',
+      label: 'Inspect V2',
+      icon: Layers2,
     },
     {
       id: 'settings',

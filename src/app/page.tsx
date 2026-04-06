@@ -4,6 +4,7 @@ import { useState } from 'react';
 import { Header } from '@/components/layout/header';
 import { Sidebar } from '@/components/layout/sidebar';
 import { InspectPanel } from '@/components/inspect/inspect-panel';
+import { InspectV2Panel } from '@/components/inspect/inspect-v2-panel';
 import { S3Explorer } from '@/components/s3/s3-explorer';
 import { Card } from '@/components/ui/card';
 
@@ -17,6 +18,8 @@ export default function Home() {
         return <S3Explorer />;
       case 'inspect':
         return <InspectPanel />;
+      case 'inspect-v2':
+        return <InspectV2Panel />;
       case 'settings':
         return (
           <Card className="p-6">
