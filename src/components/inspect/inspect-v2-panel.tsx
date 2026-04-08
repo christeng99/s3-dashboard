@@ -37,6 +37,14 @@ function money(n: number) {
   }).format(n);
 }
 
+/** Real price level (history / meta after ÷100 from cents). */
+function priceLevel(n: number) {
+  return new Intl.NumberFormat('en-US', {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  }).format(n);
+}
+
 type InspectV2Response = {
   meta: {
     timeSeconds: number;
@@ -80,11 +88,11 @@ export function InspectV2Panel() {
       return;
     }
     if (!Number.isFinite(pd)) {
-      setError('Enter a valid price diff.');
+      setError('Enter a valid price diff (cents, ÷100 in the engine).');
       return;
     }
     if (!Number.isFinite(mp) || mp < 1 || mp > 100) {
-      setError('Minimum price must be an integer from 1 to 100.');
+      setError('Min buy X must be integer cents 1–100 (÷100 in the engine).');
       return;
     }
     if (!token) {
@@ -162,21 +170,21 @@ export function InspectV2Panel() {
         </div>
         <div className="space-y-1.5 min-w-[8rem] flex-1 sm:flex-initial sm:max-w-[10rem]">
           <label htmlFor="inspect-v2-pricediff" className="text-sm font-medium">
-            Price diff
+            Price diff (cents)
           </label>
           <Input
             id="inspect-v2-pricediff"
             type="number"
             inputMode="numeric"
             step="any"
-            placeholder="e.g. 10"
+            placeholder="10 → level +0.10"
             value={priceDiff}
             onChange={(e) => setPriceDiff(e.target.value)}
           />
         </div>
         <div className="space-y-1.5 min-w-[8rem] flex-1 sm:flex-initial sm:max-w-[10rem]">
           <label htmlFor="inspect-v2-minprice" className="text-sm font-medium">
-            Min buy X
+            Min buy X (cents)
           </label>
           <Input
             id="inspect-v2-minprice"
@@ -242,14 +250,14 @@ export function InspectV2Panel() {
       {result != null ? (
         <div className="rounded-md border border-border overflow-x-auto">
           <p className="text-sm font-medium px-3 pt-3">
-            Top by profit (then lowest min. balance). Only buy X ≥ min buy X. Sell 94% of tokens at X + price
-            diff.
+            Top by profit (then lowest min. balance). Buy price level X ≥ min (cents÷100). Sell 94% at X + price
+            diff (cents÷100).
           </p>
           <table className="w-full text-sm border-collapse min-w-[640px] mt-2 mb-3">
             <thead>
               <tr className="border-b border-border bg-muted/40 text-left text-muted-foreground">
                 <th className="py-2 px-3 font-medium tabular-nums">#</th>
-                <th className="py-2 px-3 font-medium tabular-nums">Buy X</th>
+                <th className="py-2 px-3 font-medium tabular-nums">Buy X (level)</th>
                 <th className="py-2 px-3 font-medium tabular-nums">Spent</th>
                 <th className="py-2 px-3 font-medium tabular-nums">Earned</th>
                 <th className="py-2 px-3 font-medium tabular-nums">Profit</th>
@@ -267,9 +275,12 @@ export function InspectV2Panel() {
                 </tr>
               ) : (
                 (result.topScores ?? []).map((row, i) => (
-                  <tr key={`${row.price}-${i}`} className="border-b border-border/60">
+                  <tr
+                    key={`${Math.round(row.price * 100)}-${i}`}
+                    className="border-b border-border/60"
+                  >
                     <td className="py-2 px-3 tabular-nums">{i + 1}</td>
-                    <td className="py-2 px-3 tabular-nums">{row.price}</td>
+                    <td className="py-2 px-3 tabular-nums">{priceLevel(row.price)}</td>
                     <td className="py-2 px-3 tabular-nums">{money(row.spent)}</td>
                     <td className="py-2 px-3 tabular-nums">{money(row.earned)}</td>
                     <td
@@ -316,13 +327,15 @@ export function InspectV2Panel() {
                   <td className="py-2 px-3 tabular-nums">{result.meta.amount}</td>
                 </tr>
                 <tr className="border-b border-border/60">
-                  <td className="py-2 px-3 text-muted-foreground">Price diff</td>
-                  <td className="py-2 px-3 tabular-nums">{result.meta.priceDiff}</td>
+                  <td className="py-2 px-3 text-muted-foreground">Price diff (level, cents÷100)</td>
+                  <td className="py-2 px-3 tabular-nums">
+                    {result.meta.priceDiff != null ? priceLevel(result.meta.priceDiff) : '—'}
+                  </td>
                 </tr>
                 <tr className="border-b border-border/60">
-                  <td className="py-2 px-3 text-muted-foreground">Min buy X (1–100)</td>
+                  <td className="py-2 px-3 text-muted-foreground">Min buy X (level, cents÷100)</td>
                   <td className="py-2 px-3 tabular-nums">
-                    {result.meta.minimumPrice ?? '—'}
+                    {result.meta.minimumPrice != null ? priceLevel(result.meta.minimumPrice) : '—'}
                   </td>
                 </tr>
                 <tr className="border-b border-border/60">

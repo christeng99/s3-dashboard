@@ -24,9 +24,21 @@ function tokenIdToHistoryKey(tokenId: string): string {
 type PricePoint = { time: number; price: number };
 type PriceRound = { ts: number; prices: PricePoint[] };
 
+/** Real price levels are cent-sized steps; compare on cent ticks. */
+function priceTick(p: number): number {
+  return Math.round(p * 100 + Number.EPSILON);
+}
+
+function samePrice(a: number, b: number): boolean {
+  return priceTick(a) === priceTick(b);
+}
+
+/** Cents (dashboard 1–100) → real price level for the engine. */
+const CENTS_TO_LEVEL = 100;
+
 /**
- * Raw units: spend `amount * 100` per buy; earn `tokens * 0.94 * (X + pd)` (prices scaled ×100).
- * Returned fields are divided by 100 for display.
+ * All prices are real levels (0–1 typical). `X` from history; `priceDiff` already ÷100 from cent input.
+ * Cash: spend `amount*100` ¢ per buy; earn `tokens * 0.94 * sellPrice * 100` ¢. Dollar fields ÷100 for response.
  */
 function simulateBuySellAtX(
   X: number,
@@ -57,8 +69,7 @@ function simulateBuySellAtX(
     return { spentRaw: 0, earnedRaw: 0, minBalanceRaw: 0, bought: 0, sold: 0 };
   }
 
-  const pd = priceDiff;
-  const sellPrice = X + pd;
+  const sellPrice = X + priceDiff;
 
   for (const round of priceHistory) {
     const arr = round.prices;
@@ -67,8 +78,8 @@ function simulateBuySellAtX(
     const occXPd: number[] = [];
     for (let idx = 0; idx < arr.length; idx++) {
       if (arr[idx].time > timeLimit) continue;
-      if (arr[idx].price === X) occX.push(idx);
-      if (arr[idx].price === sellPrice) occXPd.push(idx);
+      if (samePrice(arr[idx].price, X)) occX.push(idx);
+      if (samePrice(arr[idx].price, sellPrice)) occXPd.push(idx);
     }
 
     let holding = false;
@@ -80,8 +91,8 @@ function simulateBuySellAtX(
       const e = arr[i];
       if (e.time > timeLimit) continue;
 
-      if (e.price === sellPrice && holding) {
-        const sellRaw = tokens * 0.94 * sellPrice;
+      if (samePrice(e.price, sellPrice) && holding) {
+        const sellRaw = tokens * 0.94 * sellPrice * 100;
         cashRaw += sellRaw;
         earnedRaw += sellRaw;
         sold += 1;
@@ -91,7 +102,7 @@ function simulateBuySellAtX(
         if (!multiMode) roundDone = true;
       }
 
-      if (e.price === X) {
+      if (samePrice(e.price, X)) {
         if (!multiMode && roundDone) continue;
         if (holding) continue;
 
@@ -109,7 +120,7 @@ function simulateBuySellAtX(
         const buyCostRaw = amount * 100;
         cashRaw -= buyCostRaw;
         spentRaw += buyCostRaw;
-        tokens = (amount * 100) / X;
+        tokens = amount / X;
         holding = true;
         bought += 1;
         bump();
@@ -126,8 +137,9 @@ export async function POST(request: NextRequest) {
     const body = await request.json();
     const timeSeconds = Number(body.timeSeconds ?? body.time);
     const amount = Number(body.amount);
-    const priceDiff = Number(body.priceDiff);
-    const minimumPrice = Math.floor(Number(body.minimumPrice));
+    const priceDiffCents = Number(body.priceDiff);
+    const minBuyXCents = Math.floor(Number(body.minimumPrice));
+    const minBuyXLevel = minBuyXCents / CENTS_TO_LEVEL;
     const multiMode =
       body.multiMode === true ||
       body.multiMode === "true" ||
@@ -146,19 +158,22 @@ export async function POST(request: NextRequest) {
         { status: 400 },
       );
     }
-    if (!Number.isFinite(priceDiff)) {
+    if (!Number.isFinite(priceDiffCents)) {
       return NextResponse.json(
-        { error: "priceDiff must be a valid number" },
+        { error: "priceDiff must be a valid number (cents, ÷100 in engine)" },
         { status: 400 },
       );
     }
     if (
-      !Number.isFinite(minimumPrice) ||
-      minimumPrice < 1 ||
-      minimumPrice > 100
+      !Number.isFinite(minBuyXCents) ||
+      minBuyXCents < 1 ||
+      minBuyXCents > 100
     ) {
       return NextResponse.json(
-        { error: "minimumPrice must be an integer from 1 to 100" },
+        {
+          error:
+            "minimumPrice must be integer cents 1–100 (÷100 → real buy price level vs history)",
+        },
         { status: 400 },
       );
     }
@@ -196,7 +211,11 @@ export async function POST(request: NextRequest) {
         const time = parseInt(timeStr, 16);
         const price = parseInt(priceStr, 16);
 
-        realPrices.push({ time, price: Math.round(price / 10) });
+        if (time <= 29800) {
+          // packed → cent tick → real price level (same ÷100 as min buy / diff)
+          const level = Math.round(price / 10) / CENTS_TO_LEVEL;
+          realPrices.push({ time, price: level });
+        }
 
         index += 8;
       }
@@ -211,9 +230,10 @@ export async function POST(request: NextRequest) {
     }
 
     const timeLimit = timeSeconds * 100;
+    const priceDiffLevel = priceDiffCents / CENTS_TO_LEVEL;
 
     const topScores = [...allCandidatePrices]
-      .filter((X) => X > 0 && X >= minimumPrice)
+      .filter((X) => X > 0 && X + 1e-9 >= minBuyXLevel)
       .map((price) => {
         const { spentRaw, earnedRaw, minBalanceRaw, bought, sold } =
           simulateBuySellAtX(
@@ -221,7 +241,7 @@ export async function POST(request: NextRequest) {
             priceHistory,
             timeLimit,
             amount,
-            priceDiff,
+            priceDiffLevel,
             multiMode,
           );
         const profitRaw = earnedRaw - spentRaw;
@@ -247,8 +267,10 @@ export async function POST(request: NextRequest) {
         amount,
         token,
         s3Key,
-        priceDiff,
-        minimumPrice,
+        /** Real price delta (request cents ÷100). */
+        priceDiff: priceDiffLevel,
+        /** Real min buy price level (request cents ÷100). */
+        minimumPrice: minBuyXLevel,
         multiMode,
       },
       slugCount,
@@ -269,7 +291,7 @@ export async function GET() {
   return NextResponse.json(
     {
       error:
-        "Use POST with timeSeconds (0–300), amount, token, priceDiff, minimumPrice (1–100), multiMode",
+        "Use POST with timeSeconds (0–300), amount, token, priceDiff (cents, ÷100 for engine), minimumPrice (cents 1–100, ÷100 for engine), multiMode",
     },
     { status: 405 },
   );

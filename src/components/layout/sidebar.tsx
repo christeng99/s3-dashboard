@@ -1,7 +1,7 @@
 'use client';
 
 import React from 'react';
-import { FileText, Layers2, Microscope, Settings } from 'lucide-react';
+import { FileText, History, Layers2, Microscope, Settings } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
 
@@ -10,9 +10,16 @@ interface SidebarProps {
   onClose: () => void;
   activeView: string;
   onViewChange: (view: string) => void;
+  showSnowpolyMenu?: boolean;
 }
 
-export function Sidebar({ isOpen, onClose, activeView, onViewChange }: SidebarProps) {
+export function Sidebar({
+  isOpen,
+  onClose,
+  activeView,
+  onViewChange,
+  showSnowpolyMenu = false,
+}: SidebarProps) {
   const menuItems = [
     {
       id: 'explorer',
@@ -29,6 +36,15 @@ export function Sidebar({ isOpen, onClose, activeView, onViewChange }: SidebarPr
       label: 'Inspect V2',
       icon: Layers2,
     },
+    ...(showSnowpolyMenu
+      ? [
+          {
+            id: 'snowpoly-prices' as const,
+            label: 'Snowpoly prices',
+            icon: History,
+          },
+        ]
+      : []),
     {
       id: 'settings',
       label: 'Settings',

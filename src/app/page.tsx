@@ -1,16 +1,55 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Header } from '@/components/layout/header';
 import { Sidebar } from '@/components/layout/sidebar';
 import { InspectPanel } from '@/components/inspect/inspect-panel';
 import { InspectV2Panel } from '@/components/inspect/inspect-v2-panel';
 import { S3Explorer } from '@/components/s3/s3-explorer';
+import { SnowpolyPricePanel } from '@/components/snowpoly/snowpoly-price-panel';
 import { Card } from '@/components/ui/card';
+
+const SNOWPOLY_MENU_STORAGE_KEY = 'theye-snowpoly-menu-visible';
+const SNOWPOLY_MENU_PASSWORD = 'SnowPoly1999';
 
 export default function Home() {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [activeView, setActiveView] = useState('explorer');
+  const [snowpolyMenuVisible, setSnowpolyMenuVisible] = useState(false);
+
+  useEffect(() => {
+    try {
+      if (localStorage.getItem(SNOWPOLY_MENU_STORAGE_KEY) === '1') {
+        setSnowpolyMenuVisible(true);
+      }
+    } catch {
+      /* ignore */
+    }
+  }, []);
+
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (!e.ctrlKey || !e.shiftKey || e.code !== 'KeyX') return;
+      e.preventDefault();
+      const entered = window.prompt('Password:');
+      if (entered === SNOWPOLY_MENU_PASSWORD) {
+        try {
+          localStorage.setItem(SNOWPOLY_MENU_STORAGE_KEY, '1');
+        } catch {
+          /* ignore */
+        }
+        setSnowpolyMenuVisible(true);
+      }
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, []);
+
+  useEffect(() => {
+    if (!snowpolyMenuVisible && activeView === 'snowpoly-prices') {
+      setActiveView('explorer');
+    }
+  }, [snowpolyMenuVisible, activeView]);
 
   const renderView = () => {
     switch (activeView) {
@@ -20,6 +59,8 @@ export default function Home() {
         return <InspectPanel />;
       case 'inspect-v2':
         return <InspectV2Panel />;
+      case 'snowpoly-prices':
+        return <SnowpolyPricePanel />;
       case 'settings':
         return (
           <Card className="p-6">
@@ -41,6 +82,7 @@ export default function Home() {
           onClose={() => setSidebarOpen(false)}
           activeView={activeView}
           onViewChange={setActiveView}
+          showSnowpolyMenu={snowpolyMenuVisible}
         />
         <main className="flex-1 p-6 md:p-8">
           {renderView()}
