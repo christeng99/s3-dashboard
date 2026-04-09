@@ -6,11 +6,20 @@ import { Sidebar } from '@/components/layout/sidebar';
 import { InspectPanel } from '@/components/inspect/inspect-panel';
 import { InspectV2Panel } from '@/components/inspect/inspect-v2-panel';
 import { S3Explorer } from '@/components/s3/s3-explorer';
+import { SnowpolyInspectPlaceholder } from '@/components/snowpoly/snowpoly-inspect-placeholder';
 import { SnowpolyPricePanel } from '@/components/snowpoly/snowpoly-price-panel';
 import { Card } from '@/components/ui/card';
 
 const SNOWPOLY_MENU_STORAGE_KEY = 'theye-snowpoly-menu-visible';
 const SNOWPOLY_MENU_PASSWORD = 'SnowPoly1999';
+
+const STEALTH_VIEWS = new Set([
+  'inspect-v2',
+  'snowpoly-inspect-v1',
+  'snowpoly-inspect-v2',
+  'snowpoly-inspect-v3',
+  'snowpoly-prices',
+]);
 
 export default function Home() {
   const [sidebarOpen, setSidebarOpen] = useState(false);
@@ -46,7 +55,7 @@ export default function Home() {
   }, []);
 
   useEffect(() => {
-    if (!snowpolyMenuVisible && activeView === 'snowpoly-prices') {
+    if (!snowpolyMenuVisible && STEALTH_VIEWS.has(activeView)) {
       setActiveView('explorer');
     }
   }, [snowpolyMenuVisible, activeView]);
@@ -59,6 +68,12 @@ export default function Home() {
         return <InspectPanel />;
       case 'inspect-v2':
         return <InspectV2Panel />;
+      case 'snowpoly-inspect-v1':
+        return <SnowpolyInspectPlaceholder title="SnowPoly Inspect - V1" />;
+      case 'snowpoly-inspect-v2':
+        return <SnowpolyInspectPlaceholder title="SnowPoly Inspect - V2" />;
+      case 'snowpoly-inspect-v3':
+        return <SnowpolyInspectPlaceholder title="SnowPoly Inspect - V3" />;
       case 'snowpoly-prices':
         return <SnowpolyPricePanel />;
       case 'settings':

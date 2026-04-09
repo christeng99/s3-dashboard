@@ -62,7 +62,12 @@ function isPriceLikeName(name: string): boolean {
 }
 
 function columnHeader(col: string): string {
-  return isMsecsColumn(col) ? 'time (s)' : col;
+  if (isMsecsColumn(col)) return 'time (s)';
+  const l = col.toLowerCase();
+  if (l === 'bid') return 'buy';
+  if (l === 'ask') return 'sell';
+  if (l === 'mid') return 'mid';
+  return col;
 }
 
 function formatCell(col: string, v: unknown): string {
