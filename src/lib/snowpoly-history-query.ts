@@ -128,6 +128,52 @@ function buildOrderByClause(meta: { name: string }[]): string {
   return 'rowid ASC';
 }
 
+const ALL_ROWS_CAP = 2_500_000;
+
+/** Load every row for a table/day (ordered like paginated queries). Enforces a hard row cap. */
+export async function querySnowpolyHistoryAllRows(
+  table: InspectCoinKey,
+  fileDate: string,
+): Promise<{
+  rows: SnowpolyHistoryRow[];
+  total: number;
+  s3Key: string;
+}> {
+  const { bytes, s3Key } = await getPricesDbBytes(fileDate);
+  const SQL = await getSqlStatic();
+  const db = new SQL.Database(bytes);
+
+  try {
+    const meta = pragmaColumns(db, table);
+    if (meta.length === 0) {
+      throw new Error(`Table "${table}" was not found or has no columns.`);
+    }
+
+    const countStmt = db.prepare(`SELECT COUNT(*) AS c FROM ${table}`);
+    countStmt.step();
+    const total = Number(countStmt.getAsObject().c ?? 0);
+    countStmt.free();
+
+    if (total > ALL_ROWS_CAP) {
+      throw new Error(
+        `Too many rows (${total}). Current limit is ${ALL_ROWS_CAP} for inspect metrics. Narrow the export or raise the cap in code.`,
+      );
+    }
+
+    const orderBy = buildOrderByClause(meta);
+    const dataStmt = db.prepare(`SELECT * FROM ${table} ORDER BY ${orderBy}`);
+    const rows: SnowpolyHistoryRow[] = [];
+    while (dataStmt.step()) {
+      rows.push(sanitizeRow(dataStmt.getAsObject() as SnowpolyHistoryRow));
+    }
+    dataStmt.free();
+
+    return { rows, total, s3Key };
+  } finally {
+    db.close();
+  }
+}
+
 export async function querySnowpolyHistoryTable(
   table: InspectCoinKey,
   opts: { fileDate: string; page: number; pageSize: number },

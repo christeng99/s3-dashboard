@@ -1,6 +1,5 @@
 import { NextResponse } from "next/server";
 
-/** Static mock for SnowPoly Inspect - V0 (no S3 / simulation). */
 const MOCK_RESPONSE = {
   meta: {
     timeSeconds: 120,
