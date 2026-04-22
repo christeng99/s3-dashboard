@@ -1,5 +1,14 @@
 import * as Minio from 'minio';
 
+/** True when the SDK reports a missing object (wording varies by S3/MinIO gateway). */
+export function isS3ObjectMissingError(err: unknown): boolean {
+  if (err == null) return false;
+  const msg = err instanceof Error ? err.message : String(err);
+  if (/not found|nosuchkey|does not exist|NoSuchKey/i.test(msg)) return true;
+  const code = (err as { code?: string }).code;
+  return code === 'NoSuchKey' || code === 'NotFound';
+}
+
 export async function getS3Object(key: string): Promise<string> {
   const endpoint = process.env.NEXT_PUBLIC_S3_ENDPOINT;
   const accessKeyId = process.env.S3_ACCESS_KEY_ID;

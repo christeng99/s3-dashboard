@@ -22,12 +22,37 @@ type CoinId = (typeof COIN_OPTIONS)[number]["id"];
 
 type MetricRow = {
   buyX: number;
+  priceDiff?: number;
   totalRounds: number;
   xAppearance: number;
   xDiffAppearance: number;
   spent: number;
   got: number;
   profit: number;
+};
+
+type AdaptiveRoundRow = {
+  roundIndex: number;
+  roundKey: string;
+  applied: boolean;
+  buyX: number | null;
+  priceDiff: number | null;
+  spent: number;
+  got: number;
+  profit: number;
+  xAppearance: number;
+  xDiffAppearance: number;
+};
+
+type AdaptiveResult = {
+  mode: "v1" | "v2";
+  bufferRounds: number;
+  lookbackRounds: number;
+  totalRounds: number;
+  totalSpent: number;
+  totalGot: number;
+  totalProfit: number;
+  rounds: AdaptiveRoundRow[];
 };
 
 type InspectV3Response = {
@@ -43,6 +68,7 @@ type InspectV3Response = {
     totalRowsInTable: number;
     s3Key: string;
   };
+  adaptiveResult?: AdaptiveResult | null;
   rows: MetricRow[];
 };
 
@@ -68,6 +94,37 @@ function isUsdLevel(n: number): boolean {
   return Number.isFinite(n) && n >= USD_LEVEL_MIN && n <= USD_LEVEL_MAX;
 }
 
+function isUsdLevelPriceDiff(n: number): boolean {
+  return n === 0 || isUsdLevel(n);
+}
+
+function validateAdaptiveSearchRanges(
+  priceMin: number,
+  priceMax: number,
+  diffMin: number,
+  diffMax: number,
+): string | null {
+  if (
+    !Number.isFinite(priceMin) ||
+    !Number.isFinite(priceMax) ||
+    !Number.isFinite(diffMin) ||
+    !Number.isFinite(diffMax)
+  ) {
+    return "V1/V2: price and diff ranges must be valid numbers.";
+  }
+  if (
+    priceMin < USD_LEVEL_MIN ||
+    priceMax > USD_LEVEL_MAX ||
+    priceMin > priceMax
+  ) {
+    return `V1/V2: price range must be ${USD_LEVEL_MIN}–${USD_LEVEL_MAX} with min ≤ max.`;
+  }
+  if (diffMin < 0 || diffMax > USD_LEVEL_MAX || diffMin > diffMax) {
+    return `V1/V2: diff range must be 0–${USD_LEVEL_MAX} with min ≤ max.`;
+  }
+  return null;
+}
+
 export function SnowpolyInspectV3Panel() {
   const groupId = useId();
   const today = useMemo(() => new Date().toISOString().slice(0, 10), []);
@@ -77,18 +134,24 @@ export function SnowpolyInspectV3Panel() {
   const [priceDiff, setPriceDiff] = useState("0.10");
   const [minimumPrice, setMinimumPrice] = useState("0.01");
   const [belowAndAbove, setBelowAndAbove] = useState(false);
+  const [bufferRounds, setBufferRounds] = useState("0");
+  const [adaptivePriceMin, setAdaptivePriceMin] = useState("0.01");
+  const [adaptivePriceMax, setAdaptivePriceMax] = useState("0.99");
+  const [adaptiveDiffMin, setAdaptiveDiffMin] = useState("0");
+  const [adaptiveDiffMax, setAdaptiveDiffMax] = useState("1");
   const [token, setToken] = useState<CoinId | "">("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<InspectV3Response | null>(null);
 
-  const find = useCallback(async () => {
+  const find = useCallback(async (strategyMode?: "v1" | "v2") => {
     setError(null);
     setResult(null);
     const t = Number(timeSeconds);
     const a = Number(amount);
     const pd = Number(priceDiff);
     const mp = Number(minimumPrice);
+    const br = Number(bufferRounds);
     if (!date?.trim()) {
       setError("Pick a date (loads snowpoly_history/prices_YYYY-MM-DD.db).");
       return;
@@ -101,9 +164,9 @@ export function SnowpolyInspectV3Panel() {
       setError("Enter a valid amount.");
       return;
     }
-    if (!isUsdLevel(pd)) {
+    if (!isUsdLevelPriceDiff(pd)) {
       setError(
-        `Price diff must be a USD level from ${USD_LEVEL_MIN} to ${USD_LEVEL_MAX}.`,
+        `Price diff must be 0 or a USD level from ${USD_LEVEL_MIN} to ${USD_LEVEL_MAX}.`,
       );
       return;
     }
@@ -116,6 +179,21 @@ export function SnowpolyInspectV3Panel() {
     if (!token) {
       setError("Select a market.");
       return;
+    }
+    if (!Number.isFinite(br) || br < 0) {
+      setError("Buffer rounds must be a non-negative number.");
+      return;
+    }
+    if (strategyMode) {
+      const apMin = Number(adaptivePriceMin);
+      const apMax = Number(adaptivePriceMax);
+      const adMin = Number(adaptiveDiffMin);
+      const adMax = Number(adaptiveDiffMax);
+      const rangeErr = validateAdaptiveSearchRanges(apMin, apMax, adMin, adMax);
+      if (rangeErr) {
+        setError(rangeErr);
+        return;
+      }
     }
 
     setLoading(true);
@@ -131,6 +209,12 @@ export function SnowpolyInspectV3Panel() {
           priceDiff: pd,
           minimumPrice: mp,
           belowAndAbove,
+          bufferRounds: br,
+          strategyMode,
+          adaptivePriceMin: Number(adaptivePriceMin),
+          adaptivePriceMax: Number(adaptivePriceMax),
+          adaptiveDiffMin: Number(adaptiveDiffMin),
+          adaptiveDiffMax: Number(adaptiveDiffMax),
         }),
       });
       const data = await res.json();
@@ -146,7 +230,20 @@ export function SnowpolyInspectV3Panel() {
     } finally {
       setLoading(false);
     }
-  }, [timeSeconds, amount, priceDiff, minimumPrice, belowAndAbove, token, date]);
+  }, [
+    timeSeconds,
+    amount,
+    priceDiff,
+    minimumPrice,
+    belowAndAbove,
+    token,
+    date,
+    bufferRounds,
+    adaptivePriceMin,
+    adaptivePriceMax,
+    adaptiveDiffMin,
+    adaptiveDiffMax,
+  ]);
 
   const displayRows = useMemo(() => {
     if (result == null || result.rows.length === 0) return [];
@@ -212,10 +309,10 @@ export function SnowpolyInspectV3Panel() {
             id="inspect-v3-pricediff"
             type="number"
             inputMode="decimal"
-            min={USD_LEVEL_MIN}
+            min={0}
             max={USD_LEVEL_MAX}
             step={0.01}
-            placeholder={`${USD_LEVEL_MIN}–${USD_LEVEL_MAX}`}
+            placeholder="0 or 0.01–1"
             value={priceDiff}
             onChange={(e) => setPriceDiff(e.target.value)}
           />
@@ -247,12 +344,121 @@ export function SnowpolyInspectV3Panel() {
         </label>
         <Button
           type="button"
-          onClick={find}
+          onClick={() => find()}
           disabled={loading}
           className="shrink-0"
         >
           {loading ? "…" : "Find"}
         </Button>
+        <Button
+          type="button"
+          onClick={() => find("v1")}
+          disabled={loading}
+          className="shrink-0"
+          variant="secondary"
+        >
+          {loading ? "…" : "V1"}
+        </Button>
+        <Button
+          type="button"
+          onClick={() => find("v2")}
+          disabled={loading}
+          className="shrink-0"
+          variant="secondary"
+        >
+          {loading ? "…" : "V2"}
+        </Button>
+        <div className="space-y-1.5 min-w-[8rem] flex-1 sm:flex-initial sm:max-w-[10rem]">
+          <label htmlFor="inspect-v3-buffer-rounds" className="text-sm font-medium">
+            Buffer rounds
+          </label>
+          <Input
+            id="inspect-v3-buffer-rounds"
+            type="number"
+            inputMode="numeric"
+            min={0}
+            step={1}
+            placeholder="0"
+            value={bufferRounds}
+            onChange={(e) => setBufferRounds(e.target.value)}
+          />
+        </div>
+        <div className="space-y-1.5 min-w-[7.5rem] flex-1 sm:flex-initial sm:max-w-[9rem]">
+          <label
+            htmlFor="inspect-v3-adaptive-price-min"
+            className="text-sm font-medium"
+          >
+            Price min (X)
+          </label>
+          <Input
+            id="inspect-v3-adaptive-price-min"
+            type="number"
+            inputMode="decimal"
+            min={USD_LEVEL_MIN}
+            max={USD_LEVEL_MAX}
+            step={0.01}
+            placeholder="0.01"
+            value={adaptivePriceMin}
+            onChange={(e) => setAdaptivePriceMin(e.target.value)}
+          />
+        </div>
+        <div className="space-y-1.5 min-w-[7.5rem] flex-1 sm:flex-initial sm:max-w-[9rem]">
+          <label
+            htmlFor="inspect-v3-adaptive-price-max"
+            className="text-sm font-medium"
+          >
+            Price max (X)
+          </label>
+          <Input
+            id="inspect-v3-adaptive-price-max"
+            type="number"
+            inputMode="decimal"
+            min={USD_LEVEL_MIN}
+            max={USD_LEVEL_MAX}
+            step={0.01}
+            placeholder="0.99"
+            value={adaptivePriceMax}
+            onChange={(e) => setAdaptivePriceMax(e.target.value)}
+          />
+        </div>
+        <div className="space-y-1.5 min-w-[7rem] flex-1 sm:flex-initial sm:max-w-[8.5rem]">
+          <label
+            htmlFor="inspect-v3-adaptive-diff-min"
+            className="text-sm font-medium"
+          >
+            Diff min
+          </label>
+          <Input
+            id="inspect-v3-adaptive-diff-min"
+            type="number"
+            inputMode="decimal"
+            min={0}
+            max={USD_LEVEL_MAX}
+            step={0.01}
+            placeholder="0"
+            value={adaptiveDiffMin}
+            onChange={(e) => setAdaptiveDiffMin(e.target.value)}
+          />
+        </div>
+        <div className="space-y-1.5 min-w-[7rem] flex-1 sm:flex-initial sm:max-w-[8.5rem]">
+          <label
+            htmlFor="inspect-v3-adaptive-diff-max"
+            className="text-sm font-medium"
+          >
+            Diff max
+          </label>
+          <Input
+            id="inspect-v3-adaptive-diff-max"
+            type="number"
+            inputMode="decimal"
+            min={0}
+            max={USD_LEVEL_MAX}
+            step={0.01}
+            placeholder="1"
+            value={adaptiveDiffMax}
+            onChange={(e) => setAdaptiveDiffMax(e.target.value)}
+          />
+        </div>
       </div>
 
       <div
@@ -291,87 +497,183 @@ export function SnowpolyInspectV3Panel() {
       ) : null}
 
       {result != null ? (
-        <div className="rounded-md border border-border overflow-x-auto">
-          <p className="text-sm text-muted-foreground px-3 pt-3">
-            {result.meta.s3Key} · {result.meta.rowCount} row
-            {result.meta.rowCount === 1 ? "" : "s"} loaded · Total rounds:{" "}
-            {result.rows[0]?.totalRounds ?? 0}
-          </p>
-          <table className="w-full text-sm border-collapse min-w-[720px] mt-2 mb-3">
-            <thead>
-              <tr className="border-b border-border bg-muted/40 text-left text-muted-foreground">
-                <th className="py-2 px-3 font-medium tabular-nums">buy X</th>
-                <th className="py-2 px-3 font-medium tabular-nums">
-                  Total Rounds
-                </th>
-                <th className="py-2 px-3 font-medium tabular-nums">
-                  X Appearance
-                </th>
-                <th className="py-2 px-3 font-medium tabular-nums">
-                  X+Diff Appearance
-                </th>
-                <th className="py-2 px-3 font-medium tabular-nums">Spent</th>
-                <th className="py-2 px-3 font-medium tabular-nums">Got</th>
-                <th className="py-2 px-3 font-medium tabular-nums">Profit</th>
-              </tr>
-            </thead>
-            <tbody>
-              {displayRows.length === 0 ? (
-                <tr>
-                  <td
-                    className="py-6 px-3 text-muted-foreground text-center"
-                    colSpan={7}
-                  >
-                    No buy-X cases for this min X and price diff (check inputs).
-                  </td>
-                </tr>
-              ) : (
-                displayRows.map((row, i) => {
-                  const prev = i > 0 ? displayRows[i - 1] : null;
-                  const sectionBreak =
-                    prev != null && prev.profit > 0 && row.profit <= 0;
-                  return (
-                  <tr
-                    key={String(row.buyX)}
-                    className={cn(
-                      "border-b border-border/60",
-                      row.profit > 0 &&
-                        "bg-emerald-500/12 dark:bg-emerald-500/15",
-                      sectionBreak && "border-t-4 border-t-primary",
-                    )}
-                  >
-                    <td className="py-2 px-3 tabular-nums">
-                      {priceLevel(row.buyX)}
-                    </td>
-                    <td className="py-2 px-3 tabular-nums">
-                      {row.totalRounds}
-                    </td>
-                    <td className="py-2 px-3 tabular-nums">
-                      {row.xAppearance}
-                    </td>
-                    <td className="py-2 px-3 tabular-nums">
-                      {row.xDiffAppearance}
-                    </td>
-                    <td className="py-2 px-3 tabular-nums">
-                      {money(row.spent)}
-                    </td>
-                    <td className="py-2 px-3 tabular-nums">{money(row.got)}</td>
-                    <td
+        <div className="space-y-4">
+          {!result.adaptiveResult ? (
+            <div className="rounded-md border border-border overflow-x-auto">
+              <p className="text-sm text-muted-foreground px-3 pt-3">
+                {result.meta.s3Key} · {result.meta.rowCount} row
+                {result.meta.rowCount === 1 ? "" : "s"} loaded · Total rounds:{" "}
+                {result.rows[0]?.totalRounds ?? 0}
+              </p>
+              <table className="w-full text-sm border-collapse min-w-[720px] mt-2 mb-3">
+                <thead>
+                  <tr className="border-b border-border bg-muted/40 text-left text-muted-foreground">
+                    <th className="py-2 px-3 font-medium tabular-nums">buy X</th>
+                    <th className="py-2 px-3 font-medium tabular-nums">
+                      Total Rounds
+                    </th>
+                    <th className="py-2 px-3 font-medium tabular-nums">
+                      X Appearance
+                    </th>
+                    <th className="py-2 px-3 font-medium tabular-nums">
+                      X+Diff Appearance
+                    </th>
+                    <th className="py-2 px-3 font-medium tabular-nums">Spent</th>
+                    <th className="py-2 px-3 font-medium tabular-nums">Got</th>
+                    <th className="py-2 px-3 font-medium tabular-nums">Profit</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {displayRows.length === 0 ? (
+                    <tr>
+                      <td
+                        className="py-6 px-3 text-muted-foreground text-center"
+                        colSpan={7}
+                      >
+                        No buy-X cases for this min X and price diff (check inputs).
+                      </td>
+                    </tr>
+                  ) : (
+                    displayRows.map((row, i) => {
+                      const prev = i > 0 ? displayRows[i - 1] : null;
+                      const sectionBreak =
+                        prev != null && prev.profit > 0 && row.profit <= 0;
+                      return (
+                      <tr
+                        key={String(row.buyX)}
+                        className={cn(
+                          "border-b border-border/60",
+                          row.profit > 0 &&
+                            "bg-emerald-500/12 dark:bg-emerald-500/15",
+                          sectionBreak && "border-t-4 border-t-primary",
+                        )}
+                      >
+                        <td className="py-2 px-3 tabular-nums">
+                          {priceLevel(row.buyX)}
+                        </td>
+                        <td className="py-2 px-3 tabular-nums">
+                          {row.totalRounds}
+                        </td>
+                        <td className="py-2 px-3 tabular-nums">
+                          {row.xAppearance}
+                        </td>
+                        <td className="py-2 px-3 tabular-nums">
+                          {row.xDiffAppearance}
+                        </td>
+                        <td className="py-2 px-3 tabular-nums">
+                          {money(row.spent)}
+                        </td>
+                        <td className="py-2 px-3 tabular-nums">{money(row.got)}</td>
+                        <td
+                          className={cn(
+                            "py-2 px-3 tabular-nums font-medium",
+                            row.profit < 0 && "text-destructive",
+                            row.profit > 0 &&
+                              "text-emerald-600 dark:text-emerald-400",
+                          )}
+                        >
+                          {money(row.profit)}
+                        </td>
+                      </tr>
+                      );
+                    })
+                  )}
+                </tbody>
+              </table>
+            </div>
+          ) : null}
+
+          {result.adaptiveResult ? (
+            <div className="rounded-md border border-border overflow-x-auto">
+              <p className="text-sm text-muted-foreground px-3 pt-3">
+                IT {result.adaptiveResult.mode.toUpperCase()} · Buffer rounds:{" "}
+                <span className="font-semibold tabular-nums text-foreground">
+                  {result.adaptiveResult.bufferRounds}
+                </span>{" "}
+                · Lookback:{" "}
+                <span className="font-semibold tabular-nums text-foreground">
+                  {result.adaptiveResult.lookbackRounds}
+                </span>{" "}
+                rounds{" "}
+                · Spent:{" "}
+                <span className="font-semibold tabular-nums text-foreground">
+                  {money(result.adaptiveResult.totalSpent)}
+                </span>{" "}
+                · Got:{" "}
+                <span className="font-semibold tabular-nums text-foreground">
+                  {money(result.adaptiveResult.totalGot)}
+                </span>{" "}
+                · Profit:{" "}
+                <span
+                  className={cn(
+                    "font-semibold tabular-nums",
+                    result.adaptiveResult.totalProfit < 0 &&
+                      "text-destructive",
+                    result.adaptiveResult.totalProfit > 0 &&
+                      "text-emerald-600 dark:text-emerald-400",
+                    result.adaptiveResult.totalProfit === 0 && "text-foreground",
+                  )}
+                >
+                  {money(result.adaptiveResult.totalProfit)}
+                </span>
+              </p>
+              <table className="w-full text-sm border-collapse min-w-[1020px] mt-2 mb-3">
+                <thead>
+                  <tr className="border-b border-border bg-muted/40 text-left text-muted-foreground">
+                    <th className="py-2 px-3 font-medium tabular-nums">Round</th>
+                    <th className="py-2 px-3 font-medium tabular-nums">Round key</th>
+                    <th className="py-2 px-3 font-medium tabular-nums">Applied</th>
+                    <th className="py-2 px-3 font-medium tabular-nums">Buy X</th>
+                    <th className="py-2 px-3 font-medium tabular-nums">Diff</th>
+                    <th className="py-2 px-3 font-medium tabular-nums">X</th>
+                    <th className="py-2 px-3 font-medium tabular-nums">X+Diff</th>
+                    <th className="py-2 px-3 font-medium tabular-nums">Spent</th>
+                    <th className="py-2 px-3 font-medium tabular-nums">Got</th>
+                    <th className="py-2 px-3 font-medium tabular-nums">Profit</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {result.adaptiveResult.rounds.map((round) => (
+                    <tr
+                      key={`${round.roundIndex}-${round.roundKey}`}
                       className={cn(
-                        "py-2 px-3 tabular-nums font-medium",
-                        row.profit < 0 && "text-destructive",
-                        row.profit > 0 &&
-                          "text-emerald-600 dark:text-emerald-400",
+                        "border-b border-border/60",
+                        round.profit > 0 && "bg-emerald-500/12 dark:bg-emerald-500/15",
                       )}
                     >
-                      {money(row.profit)}
-                    </td>
-                  </tr>
-                  );
-                })
-              )}
-            </tbody>
-          </table>
+                      <td className="py-2 px-3 tabular-nums">{round.roundIndex}</td>
+                      <td className="py-2 px-3 tabular-nums">{round.roundKey}</td>
+                      <td className="py-2 px-3 tabular-nums">
+                        {round.applied ? "Yes" : "No"}
+                      </td>
+                      <td className="py-2 px-3 tabular-nums">
+                        {round.buyX == null ? "-" : priceLevel(round.buyX)}
+                      </td>
+                      <td className="py-2 px-3 tabular-nums">
+                        {round.priceDiff == null ? "-" : priceLevel(round.priceDiff)}
+                      </td>
+                      <td className="py-2 px-3 tabular-nums">{round.xAppearance}</td>
+                      <td className="py-2 px-3 tabular-nums">
+                        {round.xDiffAppearance}
+                      </td>
+                      <td className="py-2 px-3 tabular-nums">{money(round.spent)}</td>
+                      <td className="py-2 px-3 tabular-nums">{money(round.got)}</td>
+                      <td
+                        className={cn(
+                          "py-2 px-3 tabular-nums font-medium",
+                          round.profit < 0 && "text-destructive",
+                          round.profit > 0 &&
+                            "text-emerald-600 dark:text-emerald-400",
+                        )}
+                      >
+                        {money(round.profit)}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          ) : null}
         </div>
       ) : null}
     </Card>

@@ -1,58 +1,111 @@
-import { NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 
-const MOCK_RESPONSE = {
-  meta: {
-    timeSeconds: 120,
-    amount: 25,
-    token: "btc_up",
-    s3Key: "history/BTC_UP.json",
-    priceDiff: 0.1,
-    minimumPrice: 0.01,
-    multiMode: false,
-  },
-  slugCount: 4,
-  topScores: [
-    {
-      price: 0.52,
-      spent: 48.5,
-      earned: 62.25,
-      profit: 13.75,
-      minBalance: 2.1,
-      bought: 8,
-      sold: 7,
-    },
-    {
-      price: 0.48,
-      spent: 44.0,
-      earned: 55.5,
-      profit: 11.5,
-      minBalance: 3.4,
-      bought: 7,
-      sold: 6,
-    },
-    {
-      price: 0.55,
-      spent: 51.2,
-      earned: 58.0,
-      profit: 6.8,
-      minBalance: 5.0,
-      bought: 6,
-      sold: 5,
-    },
-  ],
-  priceData: [
-    { round_ts: 1775689200, prices: "00000abc00000def" },
-    { round_ts: 1775692800, prices: "00000fed00000cba" },
-  ],
-};
+import { isS3ObjectMissingError } from "@/lib/get-s3-object";
+import { INSPECT_COIN_S3_KEYS, type InspectCoinKey } from "@/lib/inspect-simulate";
+import { computeSnowpolyInspectV0Resolution } from "@/lib/snowpoly-inspect-v3-metrics";
+import {
+  querySnowpolyHistoryAllRows,
+  snowpolyPricesDbS3Key,
+} from "@/lib/snowpoly-history-query";
 
-export async function POST() {
-  return NextResponse.json(MOCK_RESPONSE);
+export const runtime = "nodejs";
+
+export async function POST(request: NextRequest) {
+  let fileDateForError = "";
+  try {
+    const body = await request.json();
+    const dateRaw = body.date;
+    const fileDate =
+      dateRaw === "" || dateRaw === undefined || dateRaw === null || typeof dateRaw !== "string"
+        ? null
+        : dateRaw.trim();
+    fileDateForError = fileDate ?? "";
+
+    const timeSeconds = Number(body.timeSeconds);
+    const amount = Number(body.amount);
+    const priceToBuy = Number(body.priceToBuy);
+    const token = body.token as string | undefined;
+
+    if (!fileDate) {
+      return NextResponse.json(
+        { error: "Date is required (loads snowpoly_history/prices_YYYY-MM-DD.db for that day only)." },
+        { status: 400 },
+      );
+    }
+    if (!Number.isFinite(timeSeconds) || timeSeconds < 0 || timeSeconds > 300) {
+      return NextResponse.json(
+        { error: "timeSeconds must be between 0 and 300." },
+        { status: 400 },
+      );
+    }
+    if (!Number.isFinite(amount) || amount <= 0) {
+      return NextResponse.json(
+        { error: "amount (USD per buy) must be a positive number." },
+        { status: 400 },
+      );
+    }
+    if (!Number.isFinite(priceToBuy) || priceToBuy < 0.01 || priceToBuy > 1) {
+      return NextResponse.json(
+        { error: "priceToBuy must be between 0.01 and 1 (USD level)." },
+        { status: 400 },
+      );
+    }
+    if (!token || !Object.prototype.hasOwnProperty.call(INSPECT_COIN_S3_KEYS, token)) {
+      return NextResponse.json(
+        { error: "token must be a valid market id (e.g. btc_up)." },
+        { status: 400 },
+      );
+    }
+
+    const coin = token as InspectCoinKey;
+
+    const { rows, total, s3Key } = await querySnowpolyHistoryAllRows(coin, fileDate);
+
+    const summary = computeSnowpolyInspectV0Resolution(rows, {
+      timeSeconds,
+      amount,
+      maxBuyPrice: priceToBuy,
+    });
+
+    return NextResponse.json({
+      meta: {
+        date: fileDate,
+        timeSeconds,
+        amount,
+        priceToBuy,
+        token: coin,
+        s3Key,
+        rowCount: rows.length,
+        totalRowsInTable: total,
+      },
+      summary,
+    });
+  } catch (error) {
+    console.error("inspect-v2 error:", error);
+    if (isS3ObjectMissingError(error)) {
+      const key =
+        fileDateForError && /^\d{4}-\d{2}-\d{2}$/.test(fileDateForError)
+          ? snowpolyPricesDbS3Key(fileDateForError)
+          : "snowpoly_history/prices_YYYY-MM-DD.db";
+      return NextResponse.json(
+        {
+          error: "Snowpoly history database not found in S3.",
+          detail: `No object at key "${key}". Pick a date that exists in the bucket.`,
+        },
+        { status: 404 },
+      );
+    }
+    const message = error instanceof Error ? error.message : "Unknown error";
+    return NextResponse.json(
+      { error: "Failed to run Inspect V0 simulation.", detail: message },
+      { status: 500 },
+    );
+  }
 }
 
 export async function GET() {
   return NextResponse.json({
-    message: "SnowPoly Inspect - V0 mock: use POST.",
-    sample: MOCK_RESPONSE,
+    message:
+      "Inspect V0: POST JSON { date, timeSeconds, amount, priceToBuy, token }. Loads snowpoly_history/prices_YYYY-MM-DD.db — metrics use that calendar day only.",
   });
 }

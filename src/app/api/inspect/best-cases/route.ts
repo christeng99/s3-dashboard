@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { getS3Object } from '@/lib/get-s3-object';
+import { fetchInspectPolyHistoryJson, isInspectPolyNotFoundError } from '@/lib/inspect-poly-s3';
 import {
   findBestPricePairs,
   INSPECT_COIN_S3_KEYS,
@@ -43,8 +43,7 @@ export async function POST(request: NextRequest) {
 
     const entries = await Promise.all(
       selected.map(async (key) => {
-        const s3Key = INSPECT_COIN_S3_KEYS[key];
-        const raw = await getS3Object(s3Key);
+        const { raw } = await fetchInspectPolyHistoryJson(key);
         return [key, parseInspectHistory(raw)] as const;
       }),
     );
@@ -82,6 +81,15 @@ export async function POST(request: NextRequest) {
     });
   } catch (error) {
     console.error('inspect/best-cases error:', error);
+    if (isInspectPolyNotFoundError(error)) {
+      return NextResponse.json(
+        {
+          error: 'Poly history file not found in S3.',
+          detail: `No object at key "${error.s3Key}". Upload poly_history JSON or set INSPECT_POLY_S3_PREFIX if it lives under a parent folder.`,
+        },
+        { status: 404 },
+      );
+    }
     const message = error instanceof Error ? error.message : 'Unknown error';
     return NextResponse.json(
       { error: 'Failed to find best cases', detail: message },

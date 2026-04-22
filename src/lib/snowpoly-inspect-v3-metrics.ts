@@ -14,12 +14,47 @@ export type InspectV3Params = {
 
 export type InspectV3MetricRow = {
   buyX: number;
+  priceDiff?: number;
   totalRounds: number;
   xAppearance: number;
   xDiffAppearance: number;
   spent: number;
   got: number;
   profit: number;
+};
+
+export type InspectV3AdaptiveMode = 'v1' | 'v2';
+
+/** V1/V2 only: cent grid limits for buy X and price diff search. */
+export type InspectV3AdaptiveRanges = {
+  priceMin: number;
+  priceMax: number;
+  diffMin: number;
+  diffMax: number;
+};
+
+export type InspectV3AdaptiveRoundRow = {
+  roundIndex: number;
+  roundKey: string;
+  applied: boolean;
+  buyX: number | null;
+  priceDiff: number | null;
+  spent: number;
+  got: number;
+  profit: number;
+  xAppearance: number;
+  xDiffAppearance: number;
+};
+
+export type InspectV3AdaptiveResult = {
+  mode: InspectV3AdaptiveMode;
+  bufferRounds: number;
+  lookbackRounds: number;
+  totalRounds: number;
+  totalSpent: number;
+  totalGot: number;
+  totalProfit: number;
+  rounds: InspectV3AdaptiveRoundRow[];
 };
 
 /** After first X at t0, selling may start from t0 + this delay; first matching tick through end of round counts (same units as `msecs`). */
@@ -107,6 +142,28 @@ function buildRoundGroups(
   return groups;
 }
 
+export type SnowpolyRoundRow = RoundRow;
+export type SnowpolyRoundGroup = RoundGroup;
+
+/** Same grouping/columns as Inspect V3 (for Inspect V1 sweep, etc.). */
+export function buildSnowpolyRoundGroupsFromHistory(rows: SnowpolyHistoryRow[]): RoundGroup[] {
+  if (rows.length === 0) return [];
+  const columns = Object.keys(rows[0]);
+  const askCol = resolveFirstColumn(columns, ['best_ask', 'ask']);
+  const bidCol = resolveFirstColumn(columns, ['best_bid', 'bid']);
+  const midCol = resolveColName(columns, 'mid');
+  const msecsCol = resolveColName(columns, 'msecs');
+  const roundCol = resolveColName(columns, 'round_ts');
+
+  if (!askCol || !bidCol || !msecsCol || !roundCol) {
+    throw new Error(
+      'History rows must include best_ask (or ask), best_bid (or bid), msecs, and round_ts columns (any case).',
+    );
+  }
+
+  return buildRoundGroups(rows, askCol, bidCol, midCol, msecsCol, roundCol);
+}
+
 /** Within the first `timeSeconds` of the round (`msecs` treated as milliseconds from round start). */
 function earlyMsecsCutoff(timeSeconds: number): number {
   return timeSeconds * 1000;
@@ -123,6 +180,21 @@ function enumerateBuyX(minX: number, priceDiff: number): number[] {
   }
   return out;
 }
+
+/** V1/V2: cent-level diffs in [diffMin, diffMax] (inclusive). */
+function enumerateAdaptiveDiffsInRange(diffMin: number, diffMax: number): number[] {
+  const out: number[] = [];
+  for (let c = 0; c <= 100; c += 1) {
+    const d = c / 100;
+    if (d + 1e-9 < diffMin || d - 1e-9 > diffMax) continue;
+    out.push(d);
+  }
+  return out;
+}
+
+/** V1/V2: only consider pairs where buy X + price diff (sell target level) lies in this band. */
+const ADAPTIVE_X_PLUS_DIFF_MIN = 0.1;
+const ADAPTIVE_X_PLUS_DIFF_MAX = 0.8;
 
 function matchesBuyX(r: RoundRow, X: number): boolean {
   if (approxEq(r.ask, X)) return true;
@@ -165,6 +237,42 @@ function firstRowSellAfterDelay(
     if (ok) return r;
   }
   return null;
+}
+
+type PairRoundOutcome = {
+  xAppearance: number;
+  xDiffAppearance: number;
+  spent: number;
+  got: number;
+  profit: number;
+};
+
+type PairCandidate = {
+  buyX: number;
+  priceDiff: number;
+};
+
+function evaluatePairOnRound(
+  g: RoundGroup,
+  X: number,
+  priceDiff: number,
+  amount: number,
+  earlyCutoff: number,
+  belowAndAbove: boolean,
+): PairRoundOutcome {
+  const firstXRow = firstRowMatchingBuyXInEarlyWindow(g.rows, X, earlyCutoff, belowAndAbove);
+  if (!firstXRow) {
+    return { xAppearance: 0, xDiffAppearance: 0, spent: 0, got: 0, profit: 0 };
+  }
+
+  const targetBid = X + priceDiff;
+  const firstSellRow = firstRowSellAfterDelay(g.rows, targetBid, firstXRow.msecs, belowAndAbove);
+  const xDiffAppearance = firstSellRow ? 1 : 0;
+  const spent = amount;
+  const got = xDiffAppearance ? amount * ((priceDiff + X) / X - 0.03) : 0;
+  const profit = got - spent;
+
+  return { xAppearance: 1, xDiffAppearance, spent, got, profit };
 }
 
 /** Ratio (xDiff/x) desc, then buyX asc — used server-side and for client grouping. */
@@ -250,4 +358,325 @@ export function computeSnowpolyInspectV3Metrics(
 
   result.sort(compareInspectV3MetricRows);
   return result;
+}
+
+export function computeSnowpolyInspectV3Adaptive(
+  rows: SnowpolyHistoryRow[],
+  params: InspectV3Params & {
+    bufferRounds: number;
+    mode: InspectV3AdaptiveMode;
+    adaptiveRanges: InspectV3AdaptiveRanges;
+  },
+): InspectV3AdaptiveResult {
+  if (rows.length === 0) {
+    const bufferRoundsEmpty = Math.max(0, Math.floor(params.bufferRounds));
+    return {
+      mode: params.mode,
+      bufferRounds: bufferRoundsEmpty,
+      lookbackRounds: params.mode === 'v2' ? 8 : bufferRoundsEmpty,
+      totalRounds: 0,
+      totalSpent: 0,
+      totalGot: 0,
+      totalProfit: 0,
+      rounds: [],
+    };
+  }
+
+  const columns = Object.keys(rows[0]);
+  const askCol = resolveFirstColumn(columns, ['best_ask', 'ask']);
+  const bidCol = resolveFirstColumn(columns, ['best_bid', 'bid']);
+  const midCol = resolveColName(columns, 'mid');
+  const msecsCol = resolveColName(columns, 'msecs');
+  const roundCol = resolveColName(columns, 'round_ts');
+
+  if (!askCol || !bidCol || !msecsCol || !roundCol) {
+    throw new Error(
+      'History rows must include best_ask (or ask), best_bid (or bid), msecs, and round_ts columns (any case).',
+    );
+  }
+
+  const roundGroups = buildRoundGroups(rows, askCol, bidCol, midCol, msecsCol, roundCol);
+  const totalRounds = roundGroups.length;
+  const earlyCutoff = earlyMsecsCutoff(params.timeSeconds);
+  const bufferRounds = Math.max(0, Math.floor(params.bufferRounds));
+  /** V1: last `bufferRounds` prior rounds (indices i-buffer … i-1). V2: last 8 rounds. */
+  const lookbackRounds = params.mode === 'v2' ? 8 : bufferRounds;
+  const { priceMin, priceMax, diffMin, diffMax } = params.adaptiveRanges;
+  const xLower = Math.max(params.minBuyX, priceMin);
+  const pairCandidates: PairCandidate[] = [];
+  for (const diff of enumerateAdaptiveDiffsInRange(diffMin, diffMax)) {
+    const buyXCandidates = enumerateBuyX(xLower, diff).filter((X) => X <= priceMax);
+    for (const X of buyXCandidates) {
+      const sellLevel = X + diff;
+      if (
+        sellLevel < ADAPTIVE_X_PLUS_DIFF_MIN ||
+        sellLevel > ADAPTIVE_X_PLUS_DIFF_MAX
+      ) {
+        continue;
+      }
+      pairCandidates.push({ buyX: X, priceDiff: diff });
+    }
+  }
+
+  if (pairCandidates.length === 0) {
+    return {
+      mode: params.mode,
+      bufferRounds,
+      lookbackRounds,
+      totalRounds,
+      totalSpent: 0,
+      totalGot: 0,
+      totalProfit: 0,
+      rounds: roundGroups.map((g, i) => ({
+        roundIndex: i + 1,
+        roundKey: g.roundKey,
+        applied: false,
+        buyX: null,
+        priceDiff: null,
+        spent: 0,
+        got: 0,
+        profit: 0,
+        xAppearance: 0,
+        xDiffAppearance: 0,
+      })),
+    };
+  }
+
+  const pairOutcomes = pairCandidates.map((p) => ({
+    pair: p,
+    outcomes: roundGroups.map((g) =>
+      evaluatePairOnRound(
+        g,
+        p.buyX,
+        p.priceDiff,
+        params.amount,
+        earlyCutoff,
+        params.belowAndAbove,
+      ),
+    ),
+  }));
+
+  const rounds: InspectV3AdaptiveRoundRow[] = [];
+  let totalSpent = 0;
+  let totalGot = 0;
+
+  for (let i = 0; i < totalRounds; i += 1) {
+    if (i < bufferRounds) {
+      rounds.push({
+        roundIndex: i + 1,
+        roundKey: roundGroups[i].roundKey,
+        applied: false,
+        buyX: null,
+        priceDiff: null,
+        spent: 0,
+        got: 0,
+        profit: 0,
+        xAppearance: 0,
+        xDiffAppearance: 0,
+      });
+      continue;
+    }
+
+    const historyStart = Math.max(0, i - lookbackRounds);
+    let bestIdx = 0;
+    let bestScore = -Infinity;
+    let bestTieProfit = -Infinity;
+
+    for (let pIdx = 0; pIdx < pairOutcomes.length; pIdx += 1) {
+      let histProfit = 0;
+      let histX = 0;
+      let histSell = 0;
+      for (let h = historyStart; h < i; h += 1) {
+        const o = pairOutcomes[pIdx].outcomes[h];
+        histProfit += o.profit;
+        histX += o.xAppearance;
+        histSell += o.xDiffAppearance;
+      }
+      const score = params.mode === 'v1' ? histProfit : histX > 0 ? histSell / histX : -1;
+      if (score > bestScore || (score === bestScore && histProfit > bestTieProfit)) {
+        bestScore = score;
+        bestTieProfit = histProfit;
+        bestIdx = pIdx;
+      }
+    }
+
+    const chosen = pairOutcomes[bestIdx];
+    const now = chosen.outcomes[i];
+    totalSpent += now.spent;
+    totalGot += now.got;
+    rounds.push({
+      roundIndex: i + 1,
+      roundKey: roundGroups[i].roundKey,
+      applied: true,
+      buyX: chosen.pair.buyX,
+      priceDiff: chosen.pair.priceDiff,
+      spent: now.spent,
+      got: now.got,
+      profit: now.profit,
+      xAppearance: now.xAppearance,
+      xDiffAppearance: now.xDiffAppearance,
+    });
+  }
+
+  return {
+    mode: params.mode,
+    bufferRounds,
+    lookbackRounds,
+    totalRounds,
+    totalSpent,
+    totalGot,
+    totalProfit: totalGot - totalSpent,
+    rounds,
+  };
+}
+
+const MIN_V0_BUY_FILL = 1e-4;
+
+export type InspectV0ResolutionTotals = {
+  totalRounds: number;
+  bought: number;
+  soldAt1: number;
+  soldAt0: number;
+  successPct: number | null;
+  spent: number;
+  earned: number;
+  profit: number;
+  minBalance: number;
+};
+
+export type InspectV0ResolutionParams = {
+  timeSeconds: number;
+  amount: number;
+  maxBuyPrice: number;
+};
+
+/** Level used for “real price” buy filter: mid when present, else best ask. */
+function buyRealPriceV0(r: RoundRow): number | null {
+  if (r.mid != null && Number.isFinite(r.mid)) return r.mid;
+  return Number.isFinite(r.ask) ? r.ask : null;
+}
+
+/** Settlement reference on last tick: mid, else mid of bid–ask, else ask. */
+function settlePriceV0(r: RoundRow): number | null {
+  if (r.mid != null && Number.isFinite(r.mid)) return r.mid;
+  const mid = (r.ask + r.bid) / 2;
+  if (Number.isFinite(mid)) return mid;
+  return Number.isFinite(r.ask) ? r.ask : null;
+}
+
+/**
+ * Inspect V0: same round/window semantics as JSON-era V0, but rows from Snowpoly SQLite
+ * (`querySnowpolyHistoryAllRows`). Buy first early tick with real price ≤ maxBuyPrice;
+ * settle at $1 if last tick settle price ≥ 0.5 else $0.
+ */
+export function computeSnowpolyInspectV0Resolution(
+  rows: SnowpolyHistoryRow[],
+  params: InspectV0ResolutionParams,
+): InspectV0ResolutionTotals {
+  const empty: InspectV0ResolutionTotals = {
+    totalRounds: 0,
+    bought: 0,
+    soldAt1: 0,
+    soldAt0: 0,
+    successPct: null,
+    spent: 0,
+    earned: 0,
+    profit: 0,
+    minBalance: 0,
+  };
+
+  if (
+    !Number.isFinite(params.amount) ||
+    params.amount <= 0 ||
+    !Number.isFinite(params.maxBuyPrice) ||
+    params.maxBuyPrice < MIN_V0_BUY_FILL ||
+    params.maxBuyPrice > 1 + 1e-9
+  ) {
+    return empty;
+  }
+
+  if (rows.length === 0) return empty;
+
+  const columns = Object.keys(rows[0]);
+  const askCol = resolveFirstColumn(columns, ['best_ask', 'ask']);
+  const bidCol = resolveFirstColumn(columns, ['best_bid', 'bid']);
+  const midCol = resolveColName(columns, 'mid');
+  const msecsCol = resolveColName(columns, 'msecs');
+  const roundCol = resolveColName(columns, 'round_ts');
+
+  if (!askCol || !bidCol || !msecsCol || !roundCol) {
+    throw new Error(
+      'History rows must include best_ask (or ask), best_bid (or bid), msecs, and round_ts columns (any case).',
+    );
+  }
+
+  const roundGroups = buildRoundGroups(rows, askCol, bidCol, midCol, msecsCol, roundCol);
+
+  const earlyCutoffMs = earlyMsecsCutoff(params.timeSeconds);
+
+  let totalRounds = 0;
+  let bought = 0;
+  let soldAt1 = 0;
+  let soldAt0 = 0;
+  let spent = 0;
+  let earned = 0;
+  let cash = 0;
+  let minCash = 0;
+
+  const bumpMin = () => {
+    if (cash < minCash) minCash = cash;
+  };
+
+  for (const g of roundGroups) {
+    if (g.rows.length === 0) continue;
+
+    totalRounds += 1;
+
+    let buyAt: number | null = null;
+    for (const r of g.rows) {
+      if (r.msecs > earlyCutoffMs) break;
+      const p = buyRealPriceV0(r);
+      if (
+        p != null &&
+        p >= MIN_V0_BUY_FILL &&
+        p <= params.maxBuyPrice + 1e-12
+      ) {
+        buyAt = p;
+        break;
+      }
+    }
+
+    const last = g.rows[g.rows.length - 1];
+    const settle = settlePriceV0(last);
+    if (buyAt == null || settle == null) continue;
+
+    const tokens = params.amount / buyAt;
+    bought += 1;
+    spent += params.amount;
+    cash -= params.amount;
+    bumpMin();
+
+    const payout = settle >= 0.5 ? 1 : 0;
+    const proceeds = tokens * payout;
+    earned += proceeds;
+    cash += proceeds;
+    bumpMin();
+
+    if (payout === 1) soldAt1 += 1;
+    else soldAt0 += 1;
+  }
+
+  const successPct = bought > 0 ? (100 * soldAt1) / bought : null;
+
+  return {
+    totalRounds,
+    bought,
+    soldAt1,
+    soldAt0,
+    successPct,
+    spent,
+    earned,
+    profit: earned - spent,
+    minBalance: minCash < 0 ? -minCash : 0,
+  };
 }

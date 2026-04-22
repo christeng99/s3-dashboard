@@ -7,6 +7,7 @@ import { InspectPanel } from '@/components/inspect/inspect-panel';
 import { InspectV2Panel } from '@/components/inspect/inspect-v2-panel';
 import { S3Explorer } from '@/components/s3/s3-explorer';
 import { SnowpolyInspectPlaceholder } from '@/components/snowpoly/snowpoly-inspect-placeholder';
+import { SnowpolyInspectV1Panel } from '@/components/snowpoly/snowpoly-inspect-v1-panel';
 import { SnowpolyInspectV3Panel } from '@/components/snowpoly/snowpoly-inspect-v3-panel';
 import { SnowpolyPricePanel } from '@/components/snowpoly/snowpoly-price-panel';
 import { Card } from '@/components/ui/card';
@@ -70,7 +71,7 @@ export default function Home() {
       case 'inspect-v2':
         return <InspectV2Panel />;
       case 'snowpoly-inspect-v1':
-        return <SnowpolyInspectPlaceholder title="SnowPoly Inspect - V1" />;
+        return <SnowpolyInspectV1Panel />;
       case 'snowpoly-inspect-v2':
         return <SnowpolyInspectPlaceholder title="SnowPoly Inspect - V2" />;
       case 'snowpoly-inspect-v3':

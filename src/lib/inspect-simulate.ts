@@ -11,6 +11,17 @@ export const INSPECT_COIN_S3_KEYS = {
 
 export type InspectCoinKey = keyof typeof INSPECT_COIN_S3_KEYS;
 
+/**
+ * Full S3 object key for poly JSON. Set `INSPECT_POLY_S3_PREFIX` (no leading/trailing slashes)
+ * when files live under a parent folder, e.g. `theye` → `theye/poly_history/btc_up.json`.
+ */
+export function resolveInspectCoinS3Key(coin: InspectCoinKey): string {
+  const relative = INSPECT_COIN_S3_KEYS[coin];
+  const prefix = process.env.INSPECT_POLY_S3_PREFIX?.trim().replace(/^\/+|\/+$/g, "");
+  if (!prefix) return relative;
+  return `${prefix}/${relative}`;
+}
+
 export type PriceHistory = Record<string, number[]>;
 
 export type RoundMetrics = {

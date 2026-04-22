@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useId, useState } from "react";
+import { useCallback, useId, useMemo, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -19,16 +19,6 @@ const COIN_OPTIONS = [
 
 type CoinId = (typeof COIN_OPTIONS)[number]["id"];
 
-type TopScoreRow = {
-  price: number;
-  spent: number;
-  earned: number;
-  profit: number;
-  minBalance: number;
-  bought: number;
-  sold: number;
-};
-
 function money(n: number) {
   return new Intl.NumberFormat("en-US", {
     style: "currency",
@@ -37,13 +27,43 @@ function money(n: number) {
   }).format(n);
 }
 
-/** Real price level (history / meta after ÷100 from cents). */
 function priceLevel(n: number) {
   return new Intl.NumberFormat("en-US", {
     minimumFractionDigits: 2,
     maximumFractionDigits: 2,
   }).format(n);
 }
+
+function pct(n: number | null) {
+  if (n == null) return "—";
+  return `${n.toFixed(1)}%`;
+}
+
+type InspectV2Summary = {
+  totalRounds: number;
+  bought: number;
+  soldAt1: number;
+  soldAt0: number;
+  successPct: number | null;
+  spent: number;
+  earned: number;
+  profit: number;
+  minBalance: number;
+};
+
+type InspectV2Response = {
+  meta: {
+    date: string;
+    timeSeconds: number;
+    amount: number;
+    priceToBuy: number;
+    token: string;
+    s3Key: string;
+    rowCount: number;
+    totalRowsInTable: number;
+  };
+  summary: InspectV2Summary;
+};
 
 const USD_LEVEL_MIN = 0.01;
 const USD_LEVEL_MAX = 1;
@@ -52,28 +72,13 @@ function isUsdLevel(n: number): boolean {
   return Number.isFinite(n) && n >= USD_LEVEL_MIN && n <= USD_LEVEL_MAX;
 }
 
-type InspectV2Response = {
-  meta: {
-    timeSeconds: number;
-    amount: number;
-    token: string;
-    s3Key: string;
-    priceDiff: number;
-    minimumPrice: number;
-    multiMode: boolean;
-  };
-  slugCount: number | null;
-  topScores: TopScoreRow[];
-  priceData: unknown;
-};
-
 export function InspectV2Panel() {
   const groupId = useId();
+  const today = useMemo(() => new Date().toISOString().slice(0, 10), []);
+  const [fileDate, setFileDate] = useState(today);
   const [timeSeconds, setTimeSeconds] = useState("");
   const [amount, setAmount] = useState("");
-  const [priceDiff, setPriceDiff] = useState("0.10");
-  const [minimumPrice, setMinimumPrice] = useState("0.01");
-  const [multiMode, setMultiMode] = useState(false);
+  const [priceToBuy, setPriceToBuy] = useState("0.45");
   const [token, setToken] = useState<CoinId | "">("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -84,25 +89,22 @@ export function InspectV2Panel() {
     setResult(null);
     const t = Number(timeSeconds);
     const a = Number(amount);
-    const pd = Number(priceDiff);
-    const mp = Number(minimumPrice);
+    const pb = Number(priceToBuy);
+    if (!fileDate?.trim()) {
+      setError("Pick a date (loads snowpoly_history/prices_YYYY-MM-DD.db).");
+      return;
+    }
     if (!Number.isFinite(t) || t < 0 || t > 300) {
       setError("Time must be a number from 0 to 300 (seconds).");
       return;
     }
-    if (!Number.isFinite(a)) {
-      setError("Enter a valid amount.");
+    if (!Number.isFinite(a) || a <= 0) {
+      setError("Amount must be a positive number (USD per buy).");
       return;
     }
-    if (!isUsdLevel(pd)) {
+    if (!isUsdLevel(pb)) {
       setError(
-        `Price diff must be a USD level from ${USD_LEVEL_MIN} to ${USD_LEVEL_MAX}.`,
-      );
-      return;
-    }
-    if (!isUsdLevel(mp)) {
-      setError(
-        `Min buy X must be a USD level from ${USD_LEVEL_MIN} to ${USD_LEVEL_MAX}.`,
+        `Price to buy must be a USD level from ${USD_LEVEL_MIN} to ${USD_LEVEL_MAX}.`,
       );
       return;
     }
@@ -117,12 +119,11 @@ export function InspectV2Panel() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
+          date: fileDate.trim(),
           timeSeconds: t,
           amount: a,
+          priceToBuy: pb,
           token,
-          priceDiff: pd,
-          minimumPrice: mp,
-          multiMode,
         }),
       });
       const data = await res.json();
@@ -142,15 +143,34 @@ export function InspectV2Panel() {
     } finally {
       setLoading(false);
     }
-  }, [timeSeconds, amount, priceDiff, minimumPrice, multiMode, token]);
+  }, [fileDate, timeSeconds, amount, priceToBuy, token]);
+
+  const s = result?.summary;
 
   return (
     <Card className="max-w-5xl p-5 md:p-6 space-y-4">
-      <h2 className="text-2xl font-semibold tracking-tight">
-        SnowPoly Inspect - V0
-      </h2>
+      <h2 className="text-2xl font-semibold tracking-tight">Inspect V0</h2>
+      <p className="text-sm text-muted-foreground max-w-3xl">
+        Pick the <span className="text-foreground">date</span> to load exactly one file:{" "}
+        <span className="font-mono text-xs">snowpoly_history/prices_YYYY-MM-DD.db</span> (same SQLite as Inspect
+        V3). All metrics are for that calendar day only. Per <span className="text-foreground">round_ts</span>{" "}
+        round: first tick in the first <span className="text-foreground">time (seconds)</span> window where real
+        price ≤ <span className="text-foreground">price to buy</span> (mid if present, else best ask). Settle at
+        $1 if the <strong>last</strong> tick settle level ≥ 0.50 (mid, else bid–ask mid, else ask), otherwise $0.
+      </p>
 
       <div className="flex flex-wrap items-end gap-3">
+        <div className="space-y-1.5 min-w-[10rem] flex-1 sm:flex-initial sm:max-w-[12rem]">
+          <label htmlFor="inspect-v2-db-date" className="text-sm font-medium">
+            Date
+          </label>
+          <Input
+            id="inspect-v2-db-date"
+            type="date"
+            value={fileDate}
+            onChange={(e) => setFileDate(e.target.value)}
+          />
+        </div>
         <div className="space-y-1.5 min-w-[8rem] flex-1 sm:flex-initial sm:max-w-[10rem]">
           <label htmlFor="inspect-v2-time" className="text-sm font-medium">
             Time (seconds)
@@ -162,73 +182,49 @@ export function InspectV2Panel() {
             min={0}
             max={300}
             step={1}
-            placeholder="0–300 seconds"
+            placeholder="0–300"
             value={timeSeconds}
             onChange={(e) => setTimeSeconds(e.target.value)}
           />
         </div>
         <div className="space-y-1.5 min-w-[8rem] flex-1 sm:flex-initial sm:max-w-[10rem]">
           <label htmlFor="inspect-v2-amount" className="text-sm font-medium">
-            Amount
+            Amount (USD / buy)
           </label>
           <Input
             id="inspect-v2-amount"
             type="number"
             inputMode="decimal"
             step="any"
-            placeholder="0"
+            min={0}
+            placeholder="e.g. 25"
             value={amount}
             onChange={(e) => setAmount(e.target.value)}
           />
         </div>
         <div className="space-y-1.5 min-w-[8rem] flex-1 sm:flex-initial sm:max-w-[11rem]">
-          <label htmlFor="inspect-v2-pricediff" className="text-sm font-medium">
-            Price diff (USD level)
+          <label htmlFor="inspect-v2-buy" className="text-sm font-medium">
+            Price to buy (≤)
           </label>
           <Input
-            id="inspect-v2-pricediff"
+            id="inspect-v2-buy"
             type="number"
             inputMode="decimal"
             min={USD_LEVEL_MIN}
             max={USD_LEVEL_MAX}
             step={0.01}
             placeholder={`${USD_LEVEL_MIN}–${USD_LEVEL_MAX}`}
-            value={priceDiff}
-            onChange={(e) => setPriceDiff(e.target.value)}
+            value={priceToBuy}
+            onChange={(e) => setPriceToBuy(e.target.value)}
           />
         </div>
-        <div className="space-y-1.5 min-w-[8rem] flex-1 sm:flex-initial sm:max-w-[11rem]">
-          <label htmlFor="inspect-v2-minprice" className="text-sm font-medium">
-            Min buy X (USD level)
-          </label>
-          <Input
-            id="inspect-v2-minprice"
-            type="number"
-            inputMode="decimal"
-            min={USD_LEVEL_MIN}
-            max={USD_LEVEL_MAX}
-            step={0.01}
-            placeholder={`${USD_LEVEL_MIN}–${USD_LEVEL_MAX}`}
-            value={minimumPrice}
-            onChange={(e) => setMinimumPrice(e.target.value)}
-          />
-        </div>
-        <label className="flex items-center gap-2 text-sm cursor-pointer select-none pb-2 shrink-0">
-          <input
-            type="checkbox"
-            checked={multiMode}
-            onChange={(e) => setMultiMode(e.target.checked)}
-            className="size-4 rounded border-input accent-primary"
-          />
-          Multi mode
-        </label>
         <Button
           type="button"
           onClick={find}
           disabled={loading}
           className="shrink-0"
         >
-          {loading ? "…" : "Find"}
+          {loading ? "…" : "Run"}
         </Button>
       </div>
 
@@ -267,75 +263,62 @@ export function InspectV2Panel() {
         </p>
       ) : null}
 
-      {result != null ? (
-        <div className="rounded-md border border-border overflow-x-auto">
-          <p className="text-sm font-medium px-3 pt-3">
-            Top by profit (then lowest min. balance). Buy price level X ≥ min
-            (USD level). Sell 94% at X + price diff (USD level).
-          </p>
-          <table className="w-full text-sm border-collapse min-w-[640px] mt-2 mb-3">
-            <thead>
-              <tr className="border-b border-border bg-muted/40 text-left text-muted-foreground">
-                <th className="py-2 px-3 font-medium tabular-nums">#</th>
-                <th className="py-2 px-3 font-medium tabular-nums">
-                  Buy X (level)
-                </th>
-                <th className="py-2 px-3 font-medium tabular-nums">Spent</th>
-                <th className="py-2 px-3 font-medium tabular-nums">Earned</th>
-                <th className="py-2 px-3 font-medium tabular-nums">Profit</th>
-                <th className="py-2 px-3 font-medium tabular-nums">Min bal</th>
-                <th className="py-2 px-3 font-medium tabular-nums">Bought</th>
-                <th className="py-2 px-3 font-medium tabular-nums">Sold</th>
-              </tr>
-            </thead>
-            <tbody>
-              {(result.topScores ?? []).length === 0 ? (
-                <tr>
-                  <td
-                    className="py-6 px-3 text-muted-foreground text-center"
-                    colSpan={8}
-                  >
-                    No rows (no candidate prices).
-                  </td>
-                </tr>
-              ) : (
-                (result.topScores ?? []).map((row, i) => (
-                  <tr
-                    key={`${Math.round(row.price * 100)}-${i}`}
-                    className="border-b border-border/60"
-                  >
-                    <td className="py-2 px-3 tabular-nums">{i + 1}</td>
-                    <td className="py-2 px-3 tabular-nums">
-                      {priceLevel(row.price)}
-                    </td>
-                    <td className="py-2 px-3 tabular-nums">
-                      {money(row.spent)}
-                    </td>
-                    <td className="py-2 px-3 tabular-nums">
-                      {money(row.earned)}
-                    </td>
-                    <td
-                      className={cn(
-                        "py-2 px-3 tabular-nums font-medium",
-                        row.profit < 0 && "text-destructive",
-                        row.profit > 0 &&
-                          "text-emerald-600 dark:text-emerald-400",
-                      )}
-                    >
-                      {money(row.profit)}
-                    </td>
-                    <td className="py-2 px-3 tabular-nums">
-                      {money(row.minBalance)}
-                    </td>
-                    <td className="py-2 px-3 tabular-nums">
-                      {row.bought ?? 0}
-                    </td>
-                    <td className="py-2 px-3 tabular-nums">{row.sold ?? 0}</td>
-                  </tr>
-                ))
-              )}
-            </tbody>
-          </table>
+      {s != null ? (
+        <div className="rounded-md border border-border p-4 space-y-3">
+          <p className="text-sm font-medium">Results</p>
+          <dl className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-x-6 gap-y-2 text-sm">
+            <div className="flex justify-between gap-4 border-b border-border/60 pb-2 sm:border-0 sm:pb-0">
+              <dt className="text-muted-foreground">Total rounds</dt>
+              <dd className="tabular-nums font-medium">{s.totalRounds}</dd>
+            </div>
+            <div className="flex justify-between gap-4 border-b border-border/60 pb-2 sm:border-0 sm:pb-0">
+              <dt className="text-muted-foreground">Bought</dt>
+              <dd className="tabular-nums font-medium">{s.bought}</dd>
+            </div>
+            <div className="flex justify-between gap-4 border-b border-border/60 pb-2 sm:border-0 sm:pb-0">
+              <dt className="text-muted-foreground">Sold at $1</dt>
+              <dd className="tabular-nums font-medium">{s.soldAt1}</dd>
+            </div>
+            <div className="flex justify-between gap-4 border-b border-border/60 pb-2 sm:border-0 sm:pb-0">
+              <dt className="text-muted-foreground">Sold at $0</dt>
+              <dd className="tabular-nums font-medium">{s.soldAt0}</dd>
+            </div>
+            <div className="flex justify-between gap-4 border-b border-border/60 pb-2 sm:border-0 sm:pb-0">
+              <dt className="text-muted-foreground">Success rate</dt>
+              <dd className="tabular-nums font-medium">
+                {pct(s.successPct)}{" "}
+                <span className="text-muted-foreground font-normal">
+                  (sold $1 / bought)
+                </span>
+              </dd>
+            </div>
+            <div className="flex justify-between gap-4 border-b border-border/60 pb-2 sm:border-0 sm:pb-0">
+              <dt className="text-muted-foreground">Total spent</dt>
+              <dd className="tabular-nums font-medium">{money(s.spent)}</dd>
+            </div>
+            <div className="flex justify-between gap-4 border-b border-border/60 pb-2 sm:border-0 sm:pb-0">
+              <dt className="text-muted-foreground">Total earned</dt>
+              <dd className="tabular-nums font-medium">{money(s.earned)}</dd>
+            </div>
+            <div className="flex justify-between gap-4 border-b border-border/60 pb-2 sm:border-0 sm:pb-0">
+              <dt className="text-muted-foreground">Min. balance need</dt>
+              <dd className="tabular-nums font-medium">
+                {money(s.minBalance)}
+              </dd>
+            </div>
+            <div className="flex justify-between gap-4 sm:col-span-2 lg:col-span-3">
+              <dt className="text-muted-foreground">Net profit</dt>
+              <dd
+                className={cn(
+                  "tabular-nums font-semibold",
+                  s.profit < 0 && "text-destructive",
+                  s.profit > 0 && "text-emerald-600 dark:text-emerald-400",
+                )}
+              >
+                {money(s.profit)}
+              </dd>
+            </div>
+          </dl>
         </div>
       ) : null}
 
@@ -357,6 +340,16 @@ export function InspectV2Panel() {
                   </td>
                 </tr>
                 <tr className="border-b border-border/60">
+                  <td className="py-2 px-3 text-muted-foreground">Date</td>
+                  <td className="py-2 px-3 tabular-nums">{result.meta.date}</td>
+                </tr>
+                <tr className="border-b border-border/60">
+                  <td className="py-2 px-3 text-muted-foreground">Rows loaded</td>
+                  <td className="py-2 px-3 tabular-nums">
+                    {result.meta.rowCount} / {result.meta.totalRowsInTable}
+                  </td>
+                </tr>
+                <tr className="border-b border-border/60">
                   <td className="py-2 px-3 text-muted-foreground">Time (s)</td>
                   <td className="py-2 px-3 tabular-nums">
                     {result.meta.timeSeconds}
@@ -370,56 +363,16 @@ export function InspectV2Panel() {
                 </tr>
                 <tr className="border-b border-border/60">
                   <td className="py-2 px-3 text-muted-foreground">
-                    Price diff (USD level)
+                    Price to buy
                   </td>
                   <td className="py-2 px-3 tabular-nums">
-                    {result.meta.priceDiff != null
-                      ? priceLevel(result.meta.priceDiff)
-                      : "—"}
-                  </td>
-                </tr>
-                <tr className="border-b border-border/60">
-                  <td className="py-2 px-3 text-muted-foreground">
-                    Min buy X (USD level)
-                  </td>
-                  <td className="py-2 px-3 tabular-nums">
-                    {result.meta.minimumPrice != null
-                      ? priceLevel(result.meta.minimumPrice)
-                      : "—"}
-                  </td>
-                </tr>
-                <tr className="border-b border-border/60">
-                  <td className="py-2 px-3 text-muted-foreground">
-                    Multi mode
-                  </td>
-                  <td className="py-2 px-3">
-                    {result.meta.multiMode ? "Yes" : "No"}
+                    {priceLevel(result.meta.priceToBuy)}
                   </td>
                 </tr>
                 <tr className="border-b border-border/60">
                   <td className="py-2 px-3 text-muted-foreground">Token</td>
                   <td className="py-2 px-3 font-mono text-xs">
                     {result.meta.token}
-                  </td>
-                </tr>
-                {result.slugCount != null ? (
-                  <tr className="border-b border-border/60">
-                    <td className="py-2 px-3 text-muted-foreground">
-                      Rounds (slug count)
-                    </td>
-                    <td className="py-2 px-3 tabular-nums">
-                      {result.slugCount}
-                    </td>
-                  </tr>
-                ) : null}
-                <tr>
-                  <td className="py-2 px-3 text-muted-foreground align-top">
-                    Price data (JSON)
-                  </td>
-                  <td className="py-2 px-3">
-                    <pre className="font-mono text-[11px] leading-snug max-h-64 overflow-auto whitespace-pre-wrap break-all bg-muted/30 rounded-md p-2 border border-border/60">
-                      {JSON.stringify(result.priceData, null, 2)}
-                    </pre>
                   </td>
                 </tr>
               </>
@@ -429,8 +382,8 @@ export function InspectV2Panel() {
                   className="py-8 px-3 text-muted-foreground text-center"
                   colSpan={2}
                 >
-                  Run Find to load mock inspect data (API returns static
-                  sample).
+                  Pick the date and filters, then Run. Simulation uses only that
+                  day&apos;s Snowpoly SQLite file.
                 </td>
               </tr>
             )}
