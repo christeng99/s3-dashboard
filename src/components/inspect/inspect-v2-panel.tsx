@@ -31,6 +31,22 @@ function pct(n: number | null) {
   return `${n.toFixed(1)}%`;
 }
 
+function winPctBadgeClass(n: number | null): string {
+  if (n == null) {
+    return "text-muted-foreground bg-muted/50";
+  }
+  if (n >= 85) {
+    return "text-emerald-700 dark:text-emerald-300 bg-emerald-500/12 dark:bg-emerald-500/20";
+  }
+  if (n >= 70) {
+    return "text-blue-700 dark:text-blue-300 bg-blue-500/12 dark:bg-blue-500/20";
+  }
+  if (n < 20) {
+    return "text-zinc-100 dark:text-zinc-100 bg-zinc-900/85 dark:bg-zinc-800/90";
+  }
+  return "text-violet-700 dark:text-violet-300 bg-violet-500/12 dark:bg-violet-500/20";
+}
+
 type InspectV2Row = {
   buyPrice: number;
   totalRounds: number;
@@ -233,7 +249,7 @@ export function InspectV2Panel() {
             <p className="text-xs text-muted-foreground">Price band: 0.99 to 0.50</p>
           ) : null}
           <div className="rounded-md border border-border">
-            <table className="w-full text-xs border-collapse table-fixed">
+            <table className="w-full text-sm border-collapse table-fixed">
             <thead>
               <tr className="border-b border-border bg-muted/40 text-left text-muted-foreground">
                 <th className="py-1.5 px-2 font-medium text-sky-700 dark:text-sky-300">Price</th>
@@ -261,8 +277,15 @@ export function InspectV2Panel() {
                       <span className="text-muted-foreground"> / </span>
                       <span className="text-rose-700 dark:text-rose-300">{r.failedRounds}</span>
                     </td>
-                    <td className="py-1.5 px-2 tabular-nums text-amber-700 dark:text-amber-300 font-medium">
-                      {pct(r.winProbabilityPct)}
+                    <td className="py-1.5 px-2 tabular-nums">
+                      <span
+                        className={cn(
+                          "inline-flex min-w-14 justify-center rounded px-1.5 py-0.5 font-medium",
+                          winPctBadgeClass(r.winProbabilityPct),
+                        )}
+                      >
+                        {pct(r.winProbabilityPct)}
+                      </span>
                     </td>
                   </tr>
                 ))
@@ -286,7 +309,7 @@ export function InspectV2Panel() {
             <p className="text-xs text-muted-foreground">Price band: 0.49 to 0.01</p>
           ) : null}
           <div className="rounded-md border border-border">
-            <table className="w-full text-xs border-collapse table-fixed">
+            <table className="w-full text-sm border-collapse table-fixed">
             <thead>
               <tr className="border-b border-border bg-muted/40 text-left text-muted-foreground">
                 <th className="py-1.5 px-2 font-medium text-sky-700 dark:text-sky-300">Price</th>
@@ -314,8 +337,15 @@ export function InspectV2Panel() {
                       <span className="text-muted-foreground"> / </span>
                       <span className="text-rose-700 dark:text-rose-300">{r.failedRounds}</span>
                     </td>
-                    <td className="py-1.5 px-2 tabular-nums text-amber-700 dark:text-amber-300 font-medium">
-                      {pct(r.winProbabilityPct)}
+                    <td className="py-1.5 px-2 tabular-nums">
+                      <span
+                        className={cn(
+                          "inline-flex min-w-14 justify-center rounded px-1.5 py-0.5 font-medium",
+                          winPctBadgeClass(r.winProbabilityPct),
+                        )}
+                      >
+                        {pct(r.winProbabilityPct)}
+                      </span>
                     </td>
                   </tr>
                 ))
