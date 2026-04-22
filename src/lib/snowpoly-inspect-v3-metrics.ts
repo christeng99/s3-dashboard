@@ -128,11 +128,17 @@ function buildRoundGroups(
   for (const [roundKey, list] of byRound) {
     const parsed: RoundRow[] = [];
     for (const r of list) {
-      const ask = normPriceLike(r[askCol]);
-      const bid = normPriceLike(r[bidCol]);
+      const rawAsk = normPriceLike(r[askCol]);
+      const rawBid = normPriceLike(r[bidCol]);
       const mid = midCol ? normPriceLike(r[midCol]) : null;
       const msecs = toMsecs(r[msecsCol]);
-      if (ask == null || bid == null || msecs == null) continue;
+      if (msecs == null) continue;
+
+      // Some rows can have one side missing (e.g. sparse/edge quotes).
+      // Reuse the available side so the row remains usable.
+      const ask = rawAsk ?? rawBid ?? mid;
+      const bid = rawBid ?? rawAsk ?? mid;
+      if (ask == null || bid == null) continue;
       parsed.push({ ask, bid, mid, msecs });
     }
     parsed.sort((a, b) => a.msecs - b.msecs);
@@ -550,6 +556,15 @@ export type InspectV0ResolutionParams = {
   maxBuyPrice: number;
 };
 
+export type InspectV2ProbabilityRow = {
+  buyPrice: number;
+  totalRounds: number;
+  boughtRounds: number;
+  wonRounds: number;
+  failedRounds: number;
+  winProbabilityPct: number | null;
+};
+
 /** Level used for “real price” buy filter: mid when present, else best ask. */
 function buyRealPriceV0(r: RoundRow): number | null {
   if (r.mid != null && Number.isFinite(r.mid)) return r.mid;
@@ -679,4 +694,70 @@ export function computeSnowpolyInspectV0Resolution(
     profit: earned - spent,
     minBalance: minCash < 0 ? -minCash : 0,
   };
+}
+
+/**
+ * Inspect V2 dashboard rows:
+ * - Sweep buy thresholds 0.01..0.99
+ * - Buy once per round when any tick reaches/breaks threshold
+ * - Evaluate by round last price: <0.15 fail, >0.85 win, else ignored
+ * - Sort by highest win probability
+ */
+export function computeSnowpolyInspectV2ProbabilityRows(
+  rows: SnowpolyHistoryRow[],
+): InspectV2ProbabilityRow[] {
+  if (rows.length === 0) return [];
+
+  const roundGroups = buildSnowpolyRoundGroupsFromHistory(rows).filter((g) => g.rows.length > 0);
+  const totalRounds = roundGroups.length;
+
+  const roundSnapshots = roundGroups.map((g) => {
+    const touchedCents = new Set<number>();
+    for (const r of g.rows) {
+      const p = buyRealPriceV0(r);
+      if (p == null || !Number.isFinite(p)) continue;
+      const cents = Math.round(p * 100);
+      if (cents >= 1 && cents <= 99) touchedCents.add(cents);
+    }
+    const last = g.rows[g.rows.length - 1];
+    const lastSettle = settlePriceV0(last);
+    return { touchedCents, lastSettle };
+  });
+
+  const out: InspectV2ProbabilityRow[] = [];
+  for (let cents = 1; cents <= 99; cents += 1) {
+    const buyPrice = cents / 100;
+    let boughtRounds = 0;
+    let wonRounds = 0;
+    let failedRounds = 0;
+
+    for (const snap of roundSnapshots) {
+      if (!snap.touchedCents.has(cents)) continue;
+      boughtRounds += 1;
+      if (snap.lastSettle == null || !Number.isFinite(snap.lastSettle)) continue;
+      if (snap.lastSettle > 0.85) wonRounds += 1;
+      else if (snap.lastSettle < 0.15) failedRounds += 1;
+    }
+
+    const resolved = wonRounds + failedRounds;
+    out.push({
+      buyPrice,
+      totalRounds,
+      boughtRounds,
+      wonRounds,
+      failedRounds,
+      winProbabilityPct: resolved > 0 ? (100 * wonRounds) / resolved : null,
+    });
+  }
+
+  out.sort((a, b) => {
+    const pa = a.winProbabilityPct ?? -1;
+    const pb = b.winProbabilityPct ?? -1;
+    if (pb !== pa) return pb - pa;
+    if (b.wonRounds !== a.wonRounds) return b.wonRounds - a.wonRounds;
+    if (b.boughtRounds !== a.boughtRounds) return b.boughtRounds - a.boughtRounds;
+    return a.buyPrice - b.buyPrice;
+  });
+
+  return out;
 }

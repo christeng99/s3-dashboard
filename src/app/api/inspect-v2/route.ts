@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 
 import { isS3ObjectMissingError } from "@/lib/get-s3-object";
 import { INSPECT_COIN_S3_KEYS, type InspectCoinKey } from "@/lib/inspect-simulate";
-import { computeSnowpolyInspectV0Resolution } from "@/lib/snowpoly-inspect-v3-metrics";
+import { computeSnowpolyInspectV2ProbabilityRows } from "@/lib/snowpoly-inspect-v3-metrics";
 import {
   querySnowpolyHistoryAllRows,
   snowpolyPricesDbS3Key,
@@ -21,32 +21,11 @@ export async function POST(request: NextRequest) {
         : dateRaw.trim();
     fileDateForError = fileDate ?? "";
 
-    const timeSeconds = Number(body.timeSeconds);
-    const amount = Number(body.amount);
-    const priceToBuy = Number(body.priceToBuy);
     const token = body.token as string | undefined;
 
     if (!fileDate) {
       return NextResponse.json(
         { error: "Date is required (loads snowpoly_history/prices_YYYY-MM-DD.db for that day only)." },
-        { status: 400 },
-      );
-    }
-    if (!Number.isFinite(timeSeconds) || timeSeconds < 0 || timeSeconds > 300) {
-      return NextResponse.json(
-        { error: "timeSeconds must be between 0 and 300." },
-        { status: 400 },
-      );
-    }
-    if (!Number.isFinite(amount) || amount <= 0) {
-      return NextResponse.json(
-        { error: "amount (USD per buy) must be a positive number." },
-        { status: 400 },
-      );
-    }
-    if (!Number.isFinite(priceToBuy) || priceToBuy < 0.01 || priceToBuy > 1) {
-      return NextResponse.json(
-        { error: "priceToBuy must be between 0.01 and 1 (USD level)." },
         { status: 400 },
       );
     }
@@ -61,24 +40,17 @@ export async function POST(request: NextRequest) {
 
     const { rows, total, s3Key } = await querySnowpolyHistoryAllRows(coin, fileDate);
 
-    const summary = computeSnowpolyInspectV0Resolution(rows, {
-      timeSeconds,
-      amount,
-      maxBuyPrice: priceToBuy,
-    });
+    const priceRows = computeSnowpolyInspectV2ProbabilityRows(rows);
 
     return NextResponse.json({
       meta: {
         date: fileDate,
-        timeSeconds,
-        amount,
-        priceToBuy,
         token: coin,
         s3Key,
         rowCount: rows.length,
         totalRowsInTable: total,
       },
-      summary,
+      rows: priceRows,
     });
   } catch (error) {
     console.error("inspect-v2 error:", error);
@@ -97,7 +69,7 @@ export async function POST(request: NextRequest) {
     }
     const message = error instanceof Error ? error.message : "Unknown error";
     return NextResponse.json(
-      { error: "Failed to run Inspect V0 simulation.", detail: message },
+      { error: "Failed to run Inspect V2 simulation.", detail: message },
       { status: 500 },
     );
   }
@@ -106,6 +78,6 @@ export async function POST(request: NextRequest) {
 export async function GET() {
   return NextResponse.json({
     message:
-      "Inspect V0: POST JSON { date, timeSeconds, amount, priceToBuy, token }. Loads snowpoly_history/prices_YYYY-MM-DD.db — metrics use that calendar day only.",
+      "Inspect V2: POST JSON { date, token }. Loads snowpoly_history/prices_YYYY-MM-DD.db and scans buy prices 0.01..0.99.",
   });
 }
