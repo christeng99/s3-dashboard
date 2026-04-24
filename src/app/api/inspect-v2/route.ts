@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 
 import { isS3ObjectMissingError } from "@/lib/get-s3-object";
 import { INSPECT_COIN_S3_KEYS, type InspectCoinKey } from "@/lib/inspect-simulate";
-import { computeSnowpolyInspectV2ProbabilityRows } from "@/lib/snowpoly-inspect-v3-metrics";
+import { computeSnowpolyInspectV2AppearanceMetrics } from "@/lib/snowpoly-inspect-v3-metrics";
 import {
   querySnowpolyHistoryAllRows,
   snowpolyPricesDbS3Key,
@@ -22,6 +22,8 @@ export async function POST(request: NextRequest) {
     fileDateForError = fileDate ?? "";
 
     const token = body.token as string | undefined;
+    const firstPriceRaw = body.firstPrice;
+    const secondPriceRaw = body.secondPrice;
 
     if (!fileDate) {
       return NextResponse.json(
@@ -35,12 +37,26 @@ export async function POST(request: NextRequest) {
         { status: 400 },
       );
     }
+    const firstPrice = Number(firstPriceRaw);
+    const secondPrice = Number(secondPriceRaw);
+    if (!Number.isFinite(firstPrice) || firstPrice < 0.01 || firstPrice > 0.99) {
+      return NextResponse.json(
+        { error: "firstPrice must be a number between 0.01 and 0.99." },
+        { status: 400 },
+      );
+    }
+    if (!Number.isFinite(secondPrice) || secondPrice < 0.01 || secondPrice > 0.99) {
+      return NextResponse.json(
+        { error: "secondPrice must be a number between 0.01 and 0.99." },
+        { status: 400 },
+      );
+    }
 
     const coin = token as InspectCoinKey;
 
     const { rows, total, s3Key } = await querySnowpolyHistoryAllRows(coin, fileDate);
 
-    const priceRows = computeSnowpolyInspectV2ProbabilityRows(rows);
+    const metrics = computeSnowpolyInspectV2AppearanceMetrics(rows, firstPrice, secondPrice, 3);
 
     return NextResponse.json({
       meta: {
@@ -49,8 +65,10 @@ export async function POST(request: NextRequest) {
         s3Key,
         rowCount: rows.length,
         totalRowsInTable: total,
+        firstPrice,
+        secondPrice,
       },
-      rows: priceRows,
+      metrics,
     });
   } catch (error) {
     console.error("inspect-v2 error:", error);
@@ -78,6 +96,6 @@ export async function POST(request: NextRequest) {
 export async function GET() {
   return NextResponse.json({
     message:
-      "Inspect V2: POST JSON { date, token }. Loads snowpoly_history/prices_YYYY-MM-DD.db and scans buy prices 0.01..0.99.",
+      "Inspect V2: POST JSON { date, token, firstPrice, secondPrice }. Finds first ask appearance, then first bid appearance after +3s.",
   });
 }

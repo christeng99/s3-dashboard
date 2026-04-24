@@ -565,6 +565,21 @@ export type InspectV2ProbabilityRow = {
   winProbabilityPct: number | null;
 };
 
+export type InspectV2AppearanceRoundRow = {
+  roundTs: string;
+  firstAppearanceSec: number | null;
+  secondAppearanceSec: number | null;
+};
+
+export type InspectV2AppearanceMetrics = {
+  totalRounds: number;
+  firstAppearanceCount: number;
+  secondAppearanceCount: number;
+  firstVsSecondPct: number | null;
+  firstVsTotalPct: number | null;
+  rounds: InspectV2AppearanceRoundRow[];
+};
+
 /** Level used for “real price” buy filter: mid when present, else best ask. */
 function buyRealPriceV0(r: RoundRow): number | null {
   if (r.mid != null && Number.isFinite(r.mid)) return r.mid;
@@ -760,4 +775,82 @@ export function computeSnowpolyInspectV2ProbabilityRows(
   });
 
   return out;
+}
+
+function toRoundedCents(n: number): number {
+  return Math.round(n * 100);
+}
+
+function centEq(a: number, b: number): boolean {
+  return toRoundedCents(a) === toRoundedCents(b);
+}
+
+function toSeconds2(msecs: number): number {
+  return Math.round((msecs / 1000) * 100) / 100;
+}
+
+export function computeSnowpolyInspectV2AppearanceMetrics(
+  rows: SnowpolyHistoryRow[],
+  firstPrice: number,
+  secondPrice: number,
+  delaySeconds = 3,
+): InspectV2AppearanceMetrics {
+  if (rows.length === 0) {
+    return {
+      totalRounds: 0,
+      firstAppearanceCount: 0,
+      secondAppearanceCount: 0,
+      firstVsSecondPct: null,
+      firstVsTotalPct: null,
+      rounds: [],
+    };
+  }
+
+  const delayMs = Math.max(0, Math.round(delaySeconds * 1000));
+  const groups = buildSnowpolyRoundGroupsFromHistory(rows).filter((g) => g.rows.length > 0);
+
+  const roundRows: InspectV2AppearanceRoundRow[] = [];
+  let firstAppearanceCount = 0;
+  let secondAppearanceCount = 0;
+
+  for (const g of groups) {
+    let firstAtMs: number | null = null;
+    for (const r of g.rows) {
+      if (centEq(r.ask, firstPrice)) {
+        firstAtMs = r.msecs;
+        break;
+      }
+    }
+
+    let secondAtMs: number | null = null;
+    if (firstAtMs != null) {
+      firstAppearanceCount += 1;
+      const minSecondMs = firstAtMs + delayMs;
+      for (const r of g.rows) {
+        if (r.msecs < minSecondMs) continue;
+        if (centEq(r.bid, secondPrice)) {
+          secondAtMs = r.msecs;
+          secondAppearanceCount += 1;
+          break;
+        }
+      }
+    }
+
+    roundRows.push({
+      roundTs: g.roundKey,
+      firstAppearanceSec: firstAtMs == null ? null : toSeconds2(firstAtMs),
+      secondAppearanceSec: secondAtMs == null ? null : toSeconds2(secondAtMs),
+    });
+  }
+
+  const totalRounds = groups.length;
+  return {
+    totalRounds,
+    firstAppearanceCount,
+    secondAppearanceCount,
+    firstVsSecondPct:
+      firstAppearanceCount > 0 ? (100 * secondAppearanceCount) / firstAppearanceCount : null,
+    firstVsTotalPct: totalRounds > 0 ? (100 * firstAppearanceCount) / totalRounds : null,
+    rounds: roundRows,
+  };
 }

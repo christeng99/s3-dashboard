@@ -26,34 +26,29 @@ function priceLevel(n: number) {
   }).format(n);
 }
 
-function pct(n: number | null) {
-  if (n == null) return "—";
+function sec2(n: number | null): string {
+  if (n == null) return "-";
+  return n.toFixed(2);
+}
+
+function pct(n: number | null): string {
+  if (n == null) return "-";
   return `${n.toFixed(1)}%`;
 }
 
-function winPctBadgeClass(n: number | null): string {
-  if (n == null) {
-    return "text-muted-foreground bg-muted/50";
-  }
-  if (n >= 85) {
-    return "text-emerald-700 dark:text-emerald-300 bg-emerald-500/12 dark:bg-emerald-500/20";
-  }
-  if (n >= 70) {
-    return "text-blue-700 dark:text-blue-300 bg-blue-500/12 dark:bg-blue-500/20";
-  }
-  if (n < 20) {
-    return "text-zinc-100 dark:text-zinc-100 bg-zinc-900/85 dark:bg-zinc-800/90";
-  }
-  return "text-violet-700 dark:text-violet-300 bg-violet-500/12 dark:bg-violet-500/20";
-}
+type InspectV2AppearanceRoundRow = {
+  roundTs: string;
+  firstAppearanceSec: number | null;
+  secondAppearanceSec: number | null;
+};
 
-type InspectV2Row = {
-  buyPrice: number;
+type InspectV2Metrics = {
   totalRounds: number;
-  boughtRounds: number;
-  wonRounds: number;
-  failedRounds: number;
-  winProbabilityPct: number | null;
+  firstAppearanceCount: number;
+  secondAppearanceCount: number;
+  firstVsSecondPct: number | null;
+  firstVsTotalPct: number | null;
+  rounds: InspectV2AppearanceRoundRow[];
 };
 
 type InspectV2Response = {
@@ -63,14 +58,18 @@ type InspectV2Response = {
     s3Key: string;
     rowCount: number;
     totalRowsInTable: number;
+    firstPrice: number;
+    secondPrice: number;
   };
-  rows: InspectV2Row[];
+  metrics: InspectV2Metrics;
 };
 
 export function InspectV2Panel() {
   const groupId = useId();
   const today = useMemo(() => new Date().toISOString().slice(0, 10), []);
   const [fileDate, setFileDate] = useState(today);
+  const [firstPrice, setFirstPrice] = useState("0.50");
+  const [secondPrice, setSecondPrice] = useState("0.55");
   const [token, setToken] = useState<CoinId | "">("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -87,6 +86,16 @@ export function InspectV2Panel() {
       setError("Select a market.");
       return;
     }
+    const first = Number(firstPrice);
+    const second = Number(secondPrice);
+    if (!Number.isFinite(first) || first < 0.01 || first > 0.99) {
+      setError("1st Price must be between 0.01 and 0.99.");
+      return;
+    }
+    if (!Number.isFinite(second) || second < 0.01 || second > 0.99) {
+      setError("2nd Price must be between 0.01 and 0.99.");
+      return;
+    }
 
     setLoading(true);
     try {
@@ -96,6 +105,8 @@ export function InspectV2Panel() {
         body: JSON.stringify({
           date: fileDate.trim(),
           token,
+          firstPrice: first,
+          secondPrice: second,
         }),
       });
       const data = await res.json();
@@ -115,40 +126,23 @@ export function InspectV2Panel() {
     } finally {
       setLoading(false);
     }
-  }, [fileDate, token]);
+  }, [fileDate, firstPrice, secondPrice, token]);
 
-  const rowsByPriceDesc = useMemo(
-    () => [...(result?.rows ?? [])].sort((a, b) => b.buyPrice - a.buyPrice),
-    [result?.rows],
-  );
-  const rowsHighBand = useMemo(
-    () => rowsByPriceDesc.filter((r) => r.buyPrice >= 0.5 - 1e-9),
-    [rowsByPriceDesc],
-  );
-  const rowsLowBand = useMemo(
-    () => rowsByPriceDesc.filter((r) => r.buyPrice < 0.5 - 1e-9),
-    [rowsByPriceDesc],
-  );
-  const best = useMemo(() => {
-    if (!result?.rows?.length) return null;
-    return [...result.rows].sort((a, b) => {
-      const pa = a.winProbabilityPct ?? -1;
-      const pb = b.winProbabilityPct ?? -1;
-      if (pb !== pa) return pb - pa;
-      return a.buyPrice - b.buyPrice;
-    })[0];
-  }, [result?.rows]);
+  const columns = useMemo(() => {
+    const rows = result?.metrics.rounds ?? [];
+    const cols: [InspectV2AppearanceRoundRow[], InspectV2AppearanceRoundRow[], InspectV2AppearanceRoundRow[]] =
+      [[], [], []];
+    rows.forEach((row, idx) => cols[idx % 3].push(row));
+    return cols;
+  }, [result?.metrics.rounds]);
 
   return (
-    <Card className="max-w-5xl p-5 md:p-6 space-y-4">
+    <Card className="max-w-6xl p-5 md:p-6 space-y-4">
       <h2 className="text-2xl font-semibold tracking-tight">Inspect V2</h2>
-      <p className="text-sm text-muted-foreground max-w-3xl">
-        For each buy price level from <span className="text-foreground">0.01</span> to{" "}
-        <span className="text-foreground">0.99</span>: buy once per round when market price touches that exact{" "}
-        cent-level price,
-        then evaluate the round by last price: <span className="text-foreground">&gt; 0.85</span> = won,{" "}
-        <span className="text-foreground">&lt; 0.15</span> = failed, otherwise ignored. Results are ordered by highest
-        winning probability.
+      <p className="text-sm text-muted-foreground max-w-4xl">
+        Pick date + coin, enter 1st/2nd prices, then Find. Per round: first appearance of 1st Price on{" "}
+        <span className="text-foreground">best_ask</span>, then first appearance of 2nd Price on{" "}
+        <span className="text-foreground">best_bid</span> after <span className="text-foreground">+3s</span>.
       </p>
 
       <div className="flex flex-wrap items-end gap-3">
@@ -163,13 +157,43 @@ export function InspectV2Panel() {
             onChange={(e) => setFileDate(e.target.value)}
           />
         </div>
+        <div className="space-y-1.5 min-w-[8rem]">
+          <label htmlFor="inspect-v2-first-price" className="text-sm font-medium">
+            1st Price
+          </label>
+          <Input
+            id="inspect-v2-first-price"
+            type="number"
+            inputMode="decimal"
+            min={0.01}
+            max={0.99}
+            step={0.01}
+            value={firstPrice}
+            onChange={(e) => setFirstPrice(e.target.value)}
+          />
+        </div>
+        <div className="space-y-1.5 min-w-[8rem]">
+          <label htmlFor="inspect-v2-second-price" className="text-sm font-medium">
+            2nd Price
+          </label>
+          <Input
+            id="inspect-v2-second-price"
+            type="number"
+            inputMode="decimal"
+            min={0.01}
+            max={0.99}
+            step={0.01}
+            value={secondPrice}
+            onChange={(e) => setSecondPrice(e.target.value)}
+          />
+        </div>
         <Button
           type="button"
           onClick={find}
           disabled={loading}
           className="shrink-0"
         >
-          {loading ? "…" : "Run"}
+          {loading ? "…" : "Find"}
         </Button>
       </div>
 
@@ -208,84 +232,56 @@ export function InspectV2Panel() {
         </p>
       ) : null}
 
-      {best != null ? (
-        <div className="rounded-md border border-border p-4 space-y-3">
-          <p className="text-sm font-medium">Top buy level</p>
-          <dl className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-x-6 gap-y-2 text-sm">
-            <div className="flex justify-between gap-4 border-b border-border/60 pb-2 sm:border-0 sm:pb-0">
-              <dt className="text-muted-foreground">Buy price</dt>
-              <dd className="tabular-nums font-medium">{priceLevel(best.buyPrice)}</dd>
+      {result ? (
+        <div className="rounded-md border border-border p-4">
+          <dl className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-5 gap-x-6 gap-y-2 text-sm">
+            <div className="flex justify-between gap-4">
+              <dt className="text-muted-foreground">Total Rounds</dt>
+              <dd className="tabular-nums font-medium">{result.metrics.totalRounds}</dd>
             </div>
-            <div className="flex justify-between gap-4 border-b border-border/60 pb-2 sm:border-0 sm:pb-0">
-              <dt className="text-muted-foreground">Total rounds</dt>
-              <dd className="tabular-nums font-medium">{best.totalRounds}</dd>
+            <div className="flex justify-between gap-4">
+              <dt className="text-muted-foreground">1st App</dt>
+              <dd className="tabular-nums font-medium">{result.metrics.firstAppearanceCount}</dd>
             </div>
-            <div className="flex justify-between gap-4 border-b border-border/60 pb-2 sm:border-0 sm:pb-0">
-              <dt className="text-muted-foreground">Bought rounds</dt>
-              <dd className="tabular-nums font-medium">{best.boughtRounds}</dd>
+            <div className="flex justify-between gap-4">
+              <dt className="text-muted-foreground">2nd App</dt>
+              <dd className="tabular-nums font-medium">{result.metrics.secondAppearanceCount}</dd>
             </div>
-            <div className="flex justify-between gap-4 border-b border-border/60 pb-2 sm:border-0 sm:pb-0">
-              <dt className="text-muted-foreground">Won rounds</dt>
-              <dd className="tabular-nums font-medium">{best.wonRounds}</dd>
+            <div className="flex justify-between gap-4">
+              <dt className="text-muted-foreground">2nd / 1st</dt>
+              <dd className="tabular-nums font-medium">{pct(result.metrics.firstVsSecondPct)}</dd>
             </div>
-            <div className="flex justify-between gap-4 border-b border-border/60 pb-2 sm:border-0 sm:pb-0">
-              <dt className="text-muted-foreground">Failed rounds</dt>
-              <dd className="tabular-nums font-medium">{best.failedRounds}</dd>
-            </div>
-            <div className="flex justify-between gap-4 border-b border-border/60 pb-2 sm:border-0 sm:pb-0">
-              <dt className="text-muted-foreground">P(win)</dt>
-              <dd className="tabular-nums font-medium">
-                {pct(best.winProbabilityPct)}{" "}
-                <span className="text-muted-foreground font-normal">(won / (won + failed))</span>
-              </dd>
+            <div className="flex justify-between gap-4">
+              <dt className="text-muted-foreground">1st / Total</dt>
+              <dd className="tabular-nums font-medium">{pct(result.metrics.firstVsTotalPct)}</dd>
             </div>
           </dl>
         </div>
       ) : null}
 
-      <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
-        <div className="space-y-2">
-          {result ? (
-            <p className="text-xs text-muted-foreground">Price band: 0.99 to 0.50</p>
-          ) : null}
-          <div className="rounded-md border border-border">
-            <table className="w-full text-sm border-collapse table-fixed">
+      <div className="grid grid-cols-1 xl:grid-cols-3 gap-4">
+        {columns.map((rows, colIdx) => (
+          <div key={`inspect-v2-col-${colIdx}`} className="rounded-md border border-border">
+            <table className="w-full text-sm border-collapse">
             <thead>
               <tr className="border-b border-border bg-muted/40 text-left text-muted-foreground">
-                <th className="py-1.5 px-2 font-medium text-sky-700 dark:text-sky-300">Price</th>
-                <th className="py-1.5 px-2 font-medium text-slate-700 dark:text-slate-300">Total</th>
-                <th className="py-1.5 px-2 font-medium text-indigo-700 dark:text-indigo-300">Bought</th>
-                <th className="py-1.5 px-2 font-medium text-emerald-700 dark:text-emerald-300">Won / Fail</th>
-                <th className="py-1.5 px-2 font-medium text-amber-700 dark:text-amber-300">P(win)</th>
+                <th className="py-1.5 px-2 font-medium text-sky-700 dark:text-sky-300">round_ts</th>
+                <th className="py-1.5 px-2 font-medium text-indigo-700 dark:text-indigo-300">1st_App (s)</th>
+                <th className="py-1.5 px-2 font-medium text-emerald-700 dark:text-emerald-300">2nd_App (s)</th>
               </tr>
             </thead>
             <tbody>
               {result ? (
-                rowsHighBand.map((r) => (
-                  <tr key={r.buyPrice} className="border-b border-border/60">
-                    <td className="py-1.5 px-2 tabular-nums text-sky-700 dark:text-sky-300">
-                      {priceLevel(r.buyPrice)}
-                    </td>
-                    <td className="py-1.5 px-2 tabular-nums text-slate-700 dark:text-slate-300">
-                      {r.totalRounds}
+                rows.map((r) => (
+                  <tr key={`${colIdx}-${r.roundTs}`} className="border-b border-border/60">
+                    <td className="py-1.5 px-2 tabular-nums text-sky-700 dark:text-sky-300 font-mono text-xs">
+                      {r.roundTs}
                     </td>
                     <td className="py-1.5 px-2 tabular-nums text-indigo-700 dark:text-indigo-300">
-                      {r.boughtRounds}
+                      {sec2(r.firstAppearanceSec)}
                     </td>
-                    <td className="py-1.5 px-2 tabular-nums">
-                      <span className="text-emerald-700 dark:text-emerald-300">{r.wonRounds}</span>
-                      <span className="text-muted-foreground"> / </span>
-                      <span className="text-rose-700 dark:text-rose-300">{r.failedRounds}</span>
-                    </td>
-                    <td className="py-1.5 px-2 tabular-nums">
-                      <span
-                        className={cn(
-                          "inline-flex min-w-14 justify-center rounded px-1.5 py-0.5 font-medium",
-                          winPctBadgeClass(r.winProbabilityPct),
-                        )}
-                      >
-                        {pct(r.winProbabilityPct)}
-                      </span>
+                    <td className="py-1.5 px-2 tabular-nums text-emerald-700 dark:text-emerald-300">
+                      {sec2(r.secondAppearanceSec)}
                     </td>
                   </tr>
                 ))
@@ -293,83 +289,25 @@ export function InspectV2Panel() {
                 <tr>
                   <td
                     className="py-6 px-2 text-muted-foreground text-center"
-                    colSpan={5}
+                    colSpan={3}
                   >
-                    Pick date and token, then Run.
+                    Pick date, prices and coin, then Find.
                   </td>
                 </tr>
               )}
             </tbody>
             </table>
           </div>
-        </div>
-
-        <div className="space-y-2">
-          {result ? (
-            <p className="text-xs text-muted-foreground">Price band: 0.49 to 0.01</p>
-          ) : null}
-          <div className="rounded-md border border-border">
-            <table className="w-full text-sm border-collapse table-fixed">
-            <thead>
-              <tr className="border-b border-border bg-muted/40 text-left text-muted-foreground">
-                <th className="py-1.5 px-2 font-medium text-sky-700 dark:text-sky-300">Price</th>
-                <th className="py-1.5 px-2 font-medium text-slate-700 dark:text-slate-300">Total</th>
-                <th className="py-1.5 px-2 font-medium text-indigo-700 dark:text-indigo-300">Bought</th>
-                <th className="py-1.5 px-2 font-medium text-emerald-700 dark:text-emerald-300">Won / Fail</th>
-                <th className="py-1.5 px-2 font-medium text-amber-700 dark:text-amber-300">P(win)</th>
-              </tr>
-            </thead>
-            <tbody>
-              {result ? (
-                rowsLowBand.map((r) => (
-                  <tr key={r.buyPrice} className="border-b border-border/60">
-                    <td className="py-1.5 px-2 tabular-nums text-sky-700 dark:text-sky-300">
-                      {priceLevel(r.buyPrice)}
-                    </td>
-                    <td className="py-1.5 px-2 tabular-nums text-slate-700 dark:text-slate-300">
-                      {r.totalRounds}
-                    </td>
-                    <td className="py-1.5 px-2 tabular-nums text-indigo-700 dark:text-indigo-300">
-                      {r.boughtRounds}
-                    </td>
-                    <td className="py-1.5 px-2 tabular-nums">
-                      <span className="text-emerald-700 dark:text-emerald-300">{r.wonRounds}</span>
-                      <span className="text-muted-foreground"> / </span>
-                      <span className="text-rose-700 dark:text-rose-300">{r.failedRounds}</span>
-                    </td>
-                    <td className="py-1.5 px-2 tabular-nums">
-                      <span
-                        className={cn(
-                          "inline-flex min-w-14 justify-center rounded px-1.5 py-0.5 font-medium",
-                          winPctBadgeClass(r.winProbabilityPct),
-                        )}
-                      >
-                        {pct(r.winProbabilityPct)}
-                      </span>
-                    </td>
-                  </tr>
-                ))
-              ) : (
-                <tr>
-                  <td
-                    className="py-6 px-2 text-muted-foreground text-center"
-                    colSpan={5}
-                  >
-                    Pick date and token, then Run.
-                  </td>
-                </tr>
-              )}
-            </tbody>
-            </table>
-          </div>
-        </div>
+        ))}
       </div>
       {result ? (
         <p className="text-xs text-muted-foreground">
           <span className="font-medium text-foreground">Source:</span>{" "}
           <span className="font-mono">{result.meta.s3Key}</span> · Date {result.meta.date} · Rows{" "}
           {result.meta.rowCount}/{result.meta.totalRowsInTable} · Token{" "}
-          <span className="font-mono">{result.meta.token}</span>
+          <span className="font-mono">{result.meta.token}</span> · 1st{" "}
+          <span className="font-mono">{priceLevel(result.meta.firstPrice)}</span> · 2nd{" "}
+          <span className="font-mono">{priceLevel(result.meta.secondPrice)}</span>
         </p>
       ) : null}
     </Card>
