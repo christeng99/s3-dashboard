@@ -234,26 +234,36 @@ export function InspectV2Panel() {
 
       {result ? (
         <div className="rounded-md border border-border p-4">
-          <dl className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-5 gap-x-6 gap-y-2 text-sm">
-            <div className="flex justify-between gap-4">
-              <dt className="text-muted-foreground">Total Rounds</dt>
-              <dd className="tabular-nums font-medium">{result.metrics.totalRounds}</dd>
+          <dl className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-5 gap-x-6 gap-y-3">
+            <div className="space-y-1">
+              <dt className="text-xs uppercase tracking-wide text-muted-foreground">Total Rounds</dt>
+              <dd className="tabular-nums text-2xl font-semibold text-slate-900 dark:text-slate-100">
+                {result.metrics.totalRounds}
+              </dd>
             </div>
-            <div className="flex justify-between gap-4">
-              <dt className="text-muted-foreground">1st App</dt>
-              <dd className="tabular-nums font-medium">{result.metrics.firstAppearanceCount}</dd>
+            <div className="space-y-1">
+              <dt className="text-xs uppercase tracking-wide text-muted-foreground">1st App</dt>
+              <dd className="tabular-nums text-2xl font-semibold text-indigo-700 dark:text-indigo-300">
+                {result.metrics.firstAppearanceCount}
+              </dd>
             </div>
-            <div className="flex justify-between gap-4">
-              <dt className="text-muted-foreground">2nd App</dt>
-              <dd className="tabular-nums font-medium">{result.metrics.secondAppearanceCount}</dd>
+            <div className="space-y-1">
+              <dt className="text-xs uppercase tracking-wide text-muted-foreground">2nd App</dt>
+              <dd className="tabular-nums text-2xl font-semibold text-emerald-700 dark:text-emerald-300">
+                {result.metrics.secondAppearanceCount}
+              </dd>
             </div>
-            <div className="flex justify-between gap-4">
-              <dt className="text-muted-foreground">2nd / 1st</dt>
-              <dd className="tabular-nums font-medium">{pct(result.metrics.firstVsSecondPct)}</dd>
+            <div className="space-y-1">
+              <dt className="text-xs uppercase tracking-wide text-muted-foreground">2nd / 1st</dt>
+              <dd className="tabular-nums text-2xl font-semibold text-amber-700 dark:text-amber-300">
+                {pct(result.metrics.firstVsSecondPct)}
+              </dd>
             </div>
-            <div className="flex justify-between gap-4">
-              <dt className="text-muted-foreground">1st / Total</dt>
-              <dd className="tabular-nums font-medium">{pct(result.metrics.firstVsTotalPct)}</dd>
+            <div className="space-y-1">
+              <dt className="text-xs uppercase tracking-wide text-muted-foreground">1st / Total</dt>
+              <dd className="tabular-nums text-2xl font-semibold text-sky-700 dark:text-sky-300">
+                {pct(result.metrics.firstVsTotalPct)}
+              </dd>
             </div>
           </dl>
         </div>
